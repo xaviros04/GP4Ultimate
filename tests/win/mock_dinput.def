@@ -1,0 +1,18 @@
+LIBRARY mock_dinput
+EXPORTS
+    DirectInput8Create
+    mock_set_axis
+    mock_set_button
+    mock_set_pov
+    mock_force
+    mock_effects_alive
+    mock_effects_created
+    mock_last_axis_ofs
+    mock_last_naxes
+    mock_last_dir
+    mock_autocenter
+    mock_coop
+    mock_starts
+    mock_resets
+    mock_lose_focus
+    mock_stop_all

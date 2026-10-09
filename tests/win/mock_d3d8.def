@@ -1,0 +1,6 @@
+LIBRARY mock_d3d8
+EXPORTS
+    Direct3DCreate8
+    mock_presents
+    mock_draws
+    mock_last_pp

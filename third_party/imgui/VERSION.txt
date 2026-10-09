@@ -1,0 +1,2 @@
+97428e8ac99e339ce05eee531cf55b77b29ea709 Fri Mar 14 16:30:39 2025 +0100
+Dear ImGui v1.91.9 (https://github.com/ocornut/imgui), MIT. Unmodified; only the core and the win32/dx9 backends.
