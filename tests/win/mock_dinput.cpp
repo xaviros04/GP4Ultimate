@@ -229,6 +229,8 @@ HRESULT STDMETHODCALLTYPE MockEffect::SetParameters(LPCDIEFFECT e, DWORD f) noex
     return g_state[dev].acquired ? DI_OK : DI_DOWNLOADSKIPPED;
 }
 
+volatile LONG g_reentered = 0;
+
 class MockDI : public IDirectInput8A {
 public:
     LONG ref = 1;
@@ -238,8 +240,32 @@ public:
     STDMETHOD_(ULONG, Release)() override { LONG r = InterlockedDecrement(&ref); if (!r) delete this; return r; }
     STDMETHOD(CreateDevice)(REFGUID g, LPDIRECTINPUTDEVICE8A* out, LPUNKNOWN) override {
         for (int i = 0; i < 3; ++i)
-            if (g == g_spec[i].instance) { *out = new MockDevice(i); return DI_OK; }
+            if (g == g_spec[i].instance) {
+                if (i == 0 && GetEnvironmentVariableA("GP4U_MOCK_REENTER", nullptr, 0)) reenter();
+                *out = new MockDevice(i);
+                return DI_OK;
+            }
         return DIERR_DEVICENOTREG;
+    }
+    // Like Logitech G HUB's force-feedback driver: while the wheel is being opened, the
+    // driver (loaded into the game's process) creates its own DirectInput through whatever
+    // "dinput8.dll" is loaded - the mod's proxy - and enumerates and opens devices.
+    static BOOL CALLBACK count_cb(LPCDIDEVICEINSTANCEA, LPVOID r) {
+        ++*(int*)r;
+        return DIENUM_CONTINUE;
+    }
+    static void reenter() {
+        typedef HRESULT(WINAPI * CreateFn)(HINSTANCE, DWORD, REFIID, LPVOID*, LPUNKNOWN);
+        HMODULE proxy = GetModuleHandleA("dinput8.dll");
+        auto create = proxy ? (CreateFn)GetProcAddress(proxy, "DirectInput8Create") : nullptr;
+        if (!create) return;
+        IDirectInput8A* di = nullptr;
+        if (FAILED(create(GetModuleHandleA(nullptr), DIRECTINPUT_VERSION, IID_IDirectInput8A, (LPVOID*)&di, nullptr)) || !di)
+            return;
+        int n = 0;
+        di->EnumDevices(DI8DEVCLASS_GAMECTRL, count_cb, &n, DIEDFL_ATTACHEDONLY);
+        di->Release();
+        if (n == 3) InterlockedIncrement(&g_reentered);   // saw the real devices, not the virtual one
     }
     STDMETHOD(EnumDevices)(DWORD, LPDIENUMDEVICESCALLBACKA cb, LPVOID ref, DWORD) override {
         for (auto& s : g_spec) {
@@ -265,6 +291,7 @@ public:
 }  // namespace
 
 extern "C" {
+LONG mock_reentered(void) { return g_reentered; }
 HRESULT WINAPI DirectInput8Create(HINSTANCE, DWORD, REFIID riid, LPVOID* out, LPUNKNOWN) {
     if (riid != IID_IDirectInput8A) return DIERR_NOINTERFACE;
     *out = new MockDI();

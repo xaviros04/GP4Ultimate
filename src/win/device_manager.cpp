@@ -78,6 +78,11 @@ bool DeviceManager::open(PhysDevice& d, const DIDEVICEINSTANCEA& inst) {
 }
 
 bool DeviceManager::init(DI8CreateFn create, const MappingConfig& cfg, bool ffb_background) {
+    // Re-entry from inside the set-up (a wheel driver calling back into this DLL while we
+    // open its device) must not wait for the lock this thread already holds.
+    static thread_local bool in_init = false;
+    if (in_init) return false;
+    struct Guard { bool& f; Guard(bool& x) : f(x) { f = true; } ~Guard() { f = false; } } guard(in_init);
     std::lock_guard<std::mutex> lk(mtx_);
     if (tried_) return active_;
     tried_ = true;

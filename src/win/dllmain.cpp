@@ -7,7 +7,9 @@
 // gp4ultimate.log explains what was found and what the game asked for.
 // Optional chaining: [general] chain = other_proxy.dll loads another dinput8 proxy (e.g.
 // the repository's verification hook, renamed) and sits in front of it.
+#include <algorithm>
 #include <mutex>
+#include <vector>
 
 #include "cockpit_patch.h"
 #include "net_hook.h"
@@ -143,13 +145,48 @@ bool ensure_device_manager() {
 
 using namespace gp4u;
 
+namespace {
+// Only GP4 itself gets the virtual controller. Other code in the process also loads
+// "dinput8.dll" (= this proxy): wheel force-feedback drivers such as Logitech G HUB's,
+// overlays, input hooks. They get the real DirectInput untouched. Proxying them would
+// also deadlock: a driver's DirectInput8Create runs inside our own CreateDevice of its
+// wheel, while the device manager is still being set up.
+bool called_by_game(void* return_address, std::string* module_name) {
+    HMODULE m = nullptr;
+    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCSTR)return_address, &m))
+        return true;   // unknown caller (e.g. dynamically generated code): treat as the game
+    if (m == GetModuleHandleA(nullptr)) return true;
+    char path[MAX_PATH] = "";
+    GetModuleFileNameA(m, path, MAX_PATH);
+    *module_name = path;
+    return false;
+}
+}  // namespace
+
 extern "C" HRESULT WINAPI DirectInput8Create(HINSTANCE hinst, DWORD version, REFIID riid, LPVOID* out,
                                              LPUNKNOWN outer) {
+#if defined(_MSC_VER)
+    void* caller = _ReturnAddress();
+#else
+    void* caller = __builtin_return_address(0);
+#endif
     std::call_once(g_init_once, load_settings);
     ModSettings& s = mod();
     if (!s.real_create) return DIERR_GENERIC;
     HRESULT hr = s.real_create(hinst, version, riid, out, outer);
     if (FAILED(hr) || !out || !*out || !s.input_enabled) return hr;
+    std::string other;
+    if (!called_by_game(caller, &other)) {
+        static std::mutex mtx;
+        static std::vector<std::string> seen;
+        std::lock_guard<std::mutex> lk(mtx);
+        if (std::find(seen.begin(), seen.end(), other) == seen.end()) {
+            seen.push_back(other);
+            logf("DirectInput8Create from %s (not the game): real DirectInput, not proxied", other.c_str());
+        }
+        return hr;
+    }
     if (riid == IID_IDirectInput8A) {
         *out = static_cast<IDirectInput8A*>(new ProxyDirectInput<TraitsA>((IDirectInput8A*)*out));
         logf("game: DirectInput8Create(A, version 0x%04lx) -> proxied", (unsigned long)version);

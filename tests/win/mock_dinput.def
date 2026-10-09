@@ -16,3 +16,4 @@ EXPORTS
     mock_resets
     mock_lose_focus
     mock_stop_all
+    mock_reentered

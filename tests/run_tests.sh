@@ -24,7 +24,7 @@ if command -v i686-w64-mingw32-g++ >/dev/null; then
     fi
     (cd "$out/win32/e2e" && run ./test_cockpit.exe "${gp4arg[@]}")
     (cd "$out/win32/e2e" && run ./test_proxy.exe telemetry && run ./test_proxy.exe game \
-        && run ./test_proxy.exe gp4 && run ./test_proxy.exe aligning && run ./test_net.exe \
+        && run ./test_proxy.exe gp4 && run ./test_proxy.exe aligning && run ./test_proxy.exe reenter && run ./test_net.exe \
         && rm -f gp4ultimate_d3d.log && run ./test_d3d8.exe fix && rm -f gp4ultimate_d3d.log && run ./test_d3d8.exe nofix \
         && rm -f gp4ultimate_d3d.log && run ./test_d3d8.exe fullscreen \
         && rm -f gp4ultimate_d3d.log && run ./test_d3d8.exe fullscreen_plain)

@@ -162,6 +162,7 @@ add_test(NAME proxy_telemetry COMMAND test_proxy telemetry WORKING_DIRECTORY ${E
 add_test(NAME proxy_game COMMAND test_proxy game WORKING_DIRECTORY ${E2E_DIR})
 add_test(NAME proxy_gp4 COMMAND test_proxy gp4 WORKING_DIRECTORY ${E2E_DIR})
 add_test(NAME proxy_aligning COMMAND test_proxy aligning WORKING_DIRECTORY ${E2E_DIR})
+add_test(NAME proxy_reenter COMMAND test_proxy reenter WORKING_DIRECTORY ${E2E_DIR})
 
 # Network log: a GP4-like importer of CoCreateInstance driving the system's DirectPlay.
 add_executable(test_net tests/win/test_net.cpp)

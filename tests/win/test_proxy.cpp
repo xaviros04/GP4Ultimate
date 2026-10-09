@@ -441,6 +441,38 @@ static void run_gp4(bool aligning) {
     di->Release();
 }
 
+// A wheel driver (Logitech G HUB) that calls DirectInput8Create from inside our opening of
+// its wheel: it must get the real DirectInput, and nothing may deadlock (first G29 report:
+// black screen, the log stopped right after listing the controllers).
+static DWORD WINAPI reenter_thread(LPVOID) {
+    IDirectInput8A* di = nullptr;
+    DirectInput8Create(GetModuleHandleA(nullptr), DIRECTINPUT_VERSION, IID_IDirectInput8A, (void**)&di, nullptr);
+    if (!di) return 1;
+    IDirectInputDevice8A* dev = open_virtual(di);
+    if (dev) dev->Release();
+    di->Release();
+    return dev ? 0 : 2;
+}
+
+static void run_reenter() {
+    SetEnvironmentVariableA("GP4U_MOCK_REENTER", "1");
+    write_ini("telemetry");
+    HANDLE t = CreateThread(nullptr, 0, reenter_thread, nullptr, 0, nullptr);
+    DWORD w = WaitForSingleObject(t, 10000);
+    CHECK(w == WAIT_OBJECT_0);   // no deadlock
+    DWORD code = 99;
+    if (w == WAIT_OBJECT_0) GetExitCodeThread(t, &code);
+    CHECKV(code == 0, (long)code);   // the game still gets the virtual controller
+    HMODULE m = GetModuleHandleA("mock_dinput.dll");
+    auto reentered = m ? (LONG(*)())GetProcAddress(m, "mock_reentered") : nullptr;
+    CHECK(reentered && reentered() == 1);   // the driver saw the real devices
+    CHECK(read_log().find("(not the game): real DirectInput, not proxied") != std::string::npos);
+    if (w != WAIT_OBJECT_0) {
+        std::printf("[reenter] %d passed, %d failed (deadlock)\n", g_pass, g_fail);
+        ExitProcess(1);
+    }
+}
+
 int main(int argc, char** argv) {
     char path[MAX_PATH];
     GetModuleFileNameA(nullptr, path, MAX_PATH);
@@ -450,6 +482,7 @@ int main(int argc, char** argv) {
     if (mode == "game") run_game();
     else if (mode == "gp4") run_gp4(false);
     else if (mode == "aligning") run_gp4(true);
+    else if (mode == "reenter") run_reenter();
     else run_telemetry();
     std::printf("[%s] %d passed, %d failed\n", mode.c_str(), g_pass, g_fail);
     return g_fail ? 1 : 0;
