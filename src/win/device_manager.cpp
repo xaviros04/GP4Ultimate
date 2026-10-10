@@ -1,6 +1,7 @@
 #include "device_manager.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 
 #include "log.h"
@@ -279,7 +280,56 @@ double DeviceManager::raw01(const PhysDevice& d, int axis) const {
     return std::clamp((double)v / 65535.0, 0.0, 1.0);
 }
 
+namespace {
+double now_ms() {
+    static LARGE_INTEGER f = [] { LARGE_INTEGER x; QueryPerformanceFrequency(&x); return x; }();
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return (double)t.QuadPart * 1000.0 / (double)f.QuadPart;
+}
+bool worth_logging(unsigned n) { return n <= 5 || (n & (n - 1)) == 0; }   // 1-5, then powers of two
+}  // namespace
+
 VirtualState DeviceManager::poll() {
+    if (!active_) return VirtualState{};
+    std::call_once(poller_once_, [this] { std::thread([this] { poller(); }).detach(); });
+    std::unique_lock<std::mutex> lk(smtx_);
+    uint64_t target = ++want_;
+    scv_.notify_all();
+    if (!scv_.wait_for(lk, std::chrono::milliseconds(4), [&] { return served_ >= target; })) {
+        if (worth_logging(++stale_))
+            logf("input: the controllers did not answer within 4 ms (a driver busy): the game got the previous "
+                 "reading instead of waiting (#%u)", stale_);
+    }
+    return latest_;
+}
+
+// Reads the devices whenever the game asks (and at least every 2 ms), outside the game thread.
+void DeviceManager::poller() {
+    unsigned slow = 0;
+    for (;;) {
+        uint64_t target;
+        {
+            std::unique_lock<std::mutex> lk(smtx_);
+            scv_.wait_for(lk, std::chrono::milliseconds(2), [&] { return want_ > served_; });
+            target = want_;
+        }
+        double t0 = now_ms();
+        VirtualState vs = read_all();
+        double took = now_ms() - t0;
+        if (took > 100 && worth_logging(++slow))
+            logf("input: reading the controllers took %.0f ms (a driver stalled; the game did not wait) (#%u)", took,
+                 slow);
+        {
+            std::lock_guard<std::mutex> lk(smtx_);
+            latest_ = vs;
+            if (target > served_) served_ = target;
+        }
+        scv_.notify_all();
+    }
+}
+
+VirtualState DeviceManager::read_all() {
     std::lock_guard<std::mutex> lk(mtx_);
     VirtualState vs;
     if (!active_) return vs;

@@ -16,7 +16,7 @@
 
 - Grand Prix 4 installed, with the standard `GP4.exe` (6,275,072 bytes, sha256 starting `2046f390`). With another executable the controllers and force feedback still work, but the code patches (resolution menu, cockpit wheel, online, braking forces) are switched off and the log says so.
 - Windows 10 or 11.
-- For online play: the Windows feature **DirectPlay** (Control Panel → Programs → Turn Windows features on or off → Legacy Components → DirectPlay).
+- For online play through DirectPlay (not needed with a [GP4 Ultimate server](#online-races)): the Windows feature **DirectPlay** (Control Panel → Programs → Turn Windows features on or off → Legacy Components → DirectPlay).
 - Optional: [d3d8to9](https://github.com/crosire/d3d8to9) or dgVoodoo2 if you already use them for GP4 (see [Chaining](#chaining-other-dlls)).
 
 ## Installing
@@ -107,7 +107,12 @@ If you use d3d8to9 or dgVoodoo2, rename its `d3d8.dll` (for example to `d3d8to9.
 
 ## Online races
 
-GP4 plays online with DirectPlay. Over the internet, a virtual LAN such as **Radmin VPN** or ZeroTier works well.
+There are two ways to connect:
+
+- **A GP4 Ultimate server** (recommended): no VPN, no DirectPlay, and no open port on the players' PCs. Someone runs the server, everyone writes its address in **Online** → **Game server**, and that's it. The server can run inside the host's own GP4 (`local`). See [Online play through the GP4 Ultimate server](ONLINE.md).
+- **DirectPlay**, like the original game: over the internet it needs a virtual LAN such as **Radmin VPN** or ZeroTier. Leave **Game server** empty. [Step by step](#step-by-step-directplay).
+
+Either way, in GP4 you choose **TCP/IP**, one player creates the game and the others join it from the list.
 
 ### What GP4 Ultimate changes
 
@@ -119,7 +124,7 @@ Original GP4 makes every PC wait, at every simulation step, for the packets of t
 
 Everyone should use the **same version** of GP4 Ultimate. Friends who only want to play online can use the defaults: the configurator is only needed for controllers.
 
-### Step by step
+### Step by step (DirectPlay)
 
 1. Everyone joins the same Radmin VPN network.
 2. On every PC: DirectPlay enabled, and the Windows firewall allowing `GP4.exe` and `C:\Windows\SysWOW64\dplaysvr.exe` (Control Panel → Windows Defender Firewall → Allow an app). Set the Radmin network as **Private** (Settings → Network → the Radmin VPN adapter → Network profile).
@@ -133,6 +138,8 @@ Everyone should use the **same version** of GP4 Ultimate. Friends who only want 
 - `gp4ultimate.log` writes a `netsync` line every second (steps, packets, clock difference, waits). Attach the logs of every player when reporting a problem.
 
 ### If someone cannot join
+
+With a GP4 Ultimate server, see [its troubleshooting](ONLINE.md#troubleshooting). With DirectPlay:
 
 | Symptom | Cause | Fix |
 |---|---|---|

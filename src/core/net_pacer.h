@@ -8,7 +8,8 @@
 // race master's, extrapolated from the master's last packet with the real time elapsed
 // since it arrived. If it is ahead by more than `window_ms` it waits a little; if it is
 // behind by more than that it runs extra simulation steps (GP4's own catch-up path,
-// [0x62f8f9]). The master never waits.
+// [0x62f8f9]). The master never waits. If the master goes silent, the client keeps
+// running at real-time speed against the extrapolated clock.
 //
 // Pure C++, no Windows: unit-tested in tests/test_core.cpp.
 #pragma once
@@ -24,7 +25,7 @@ struct NetPacerConfig {
     double window_ms = 30;
     double max_wait_ms = 50;   // longest wait in one step when ahead
     int max_catchup = 3;       // extra steps per frame when behind
-    double hold_ms = 500;      // master silent longer than this: no pacing (run freely)
+    double hold_ms = 500;      // master silent longer than this: no catch-up, real-time speed
 };
 
 class NetPacer {
@@ -72,9 +73,14 @@ public:
 
     // `chain` = extra steps already run in a row before this one.
     Action decide(int32_t my_t, double now_ms, int chain) const {
-        double l;
-        if (!lead(my_t, now_ms, l)) return Action::Run;
+        if (!have_) return Action::Run;
+        double el = now_ms - rx_ms_;
+        double l = my_t - (t_ + (el > 0 ? el : 0) * rate_);
         if (l > cfg_.window_ms) return Action::Wait;
+        // A silent master (its PC froze, or it left) is not chased with extra steps, but
+        // the wait above still holds this PC to real-time speed: without it a game
+        // without a frame limit would run the race many times too fast.
+        if (el > cfg_.hold_ms) return Action::Run;
         if (l < -cfg_.window_ms && chain < cfg_.max_catchup) return Action::CatchUp;
         return Action::Run;
     }

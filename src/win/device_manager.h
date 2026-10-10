@@ -1,7 +1,10 @@
 // Owns the real game controllers (wheel, pedals, shifter/button box...) through our own
 // IDirectInput8A instance and turns their state into the composite virtual state.
 #pragma once
+#include <condition_variable>
+#include <cstdint>
 #include <mutex>
+#include <thread>
 #include <string>
 #include <vector>
 
@@ -49,7 +52,10 @@ public:
     void acquire();
     void unacquire();
 
-    // Reads every device and returns the composite state.
+    // The composite state of every device. The game thread never waits on a controller
+    // driver: a thread of ours reads the devices, and if it cannot answer within a few
+    // milliseconds (a driver call stalled, e.g. the wheel's force-feedback update), the
+    // game gets the previous reading instead of freezing.
     VirtualState poll();
 
     // --- force feedback (call with lock() held) -------------------------------------
@@ -70,6 +76,8 @@ private:
     DeviceManager() = default;
     bool open(PhysDevice& d, const DIDEVICEINSTANCEA& inst);
     void read_locked(PhysDevice& d);
+    VirtualState read_all();   // takes the device lock and reads every device
+    void poller();
     void apply_coop_locked(PhysDevice& d);
     double raw01(const PhysDevice& d, int axis) const;
     PhysDevice* find(const std::string& alias);
@@ -91,6 +99,13 @@ private:
     PovSrc pov_map_[4];
     bool ffb_background_ = false;
     uint32_t ffb_gen_ = 0;
+    // Background reading (poll()).
+    std::once_flag poller_once_;
+    std::mutex smtx_;
+    std::condition_variable scv_;
+    VirtualState latest_;
+    uint64_t want_ = 0, served_ = 0;
+    unsigned stale_ = 0;
 };
 
 }  // namespace gp4u

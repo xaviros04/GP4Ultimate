@@ -11,6 +11,7 @@ cmake -S "$here" -B "$out/native" -DGP4U_TESTS_ONLY=ON >/dev/null
 cmake --build "$out/native" -j >/dev/null
 "$out/native/test_core"
 "$out/native/test_schema" "$here"
+"$out/native/test_online"
 
 if command -v i686-w64-mingw32-g++ >/dev/null; then
     cmake -S "$here" -B "$out/win32" -DCMAKE_TOOLCHAIN_FILE="$here/cmake/i686-mingw.cmake" -DCMAKE_BUILD_TYPE=Release >/dev/null
@@ -24,10 +25,25 @@ if command -v i686-w64-mingw32-g++ >/dev/null; then
     fi
     (cd "$out/win32/e2e" && run ./test_cockpit.exe "${gp4arg[@]}")
     (cd "$out/win32/e2e" && run ./test_proxy.exe telemetry && run ./test_proxy.exe game \
-        && run ./test_proxy.exe gp4 && run ./test_proxy.exe aligning && run ./test_proxy.exe reenter && run ./test_net.exe \
+        && run ./test_proxy.exe gp4 && run ./test_proxy.exe aligning && run ./test_proxy.exe reenter && run ./test_proxy.exe crash && run ./test_net.exe \
         && rm -f gp4ultimate_d3d.log && run ./test_d3d8.exe fix && rm -f gp4ultimate_d3d.log && run ./test_d3d8.exe nofix \
         && rm -f gp4ultimate_d3d.log && run ./test_d3d8.exe fullscreen \
         && rm -f gp4ultimate_d3d.log && run ./test_d3d8.exe fullscreen_plain)
+    # Online through the GP4 Ultimate server: the server inside the DLL, nobody answering,
+    # and the stand-alone server (the native build, and the Windows one).
+    (cd "$out/win32/e2e" && run ./test_dpserver.exe local && run ./test_dpserver.exe unreachable)
+    server_test() {   # $1: port, rest: the server command
+        local port="$1"; shift
+        "$@" --port "$port" >"$out/server-$port.log" 2>&1 & local pid=$!
+        sleep 1
+        local rc=0
+        (cd "$out/win32/e2e" && run ./test_dpserver.exe "127.0.0.1:$port") || rc=$?
+        kill -INT "$pid" 2>/dev/null; wait "$pid" 2>/dev/null || true
+        return $rc
+    }
+    server_test 24933 "$out/native/gp4ultimate-server"
+    if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then server_test 24934 "$out/win32/gp4ultimate-server.exe"
+    else server_test 24934 env WINEDEBUG=-all "${WINE:-wine}" "$out/win32/gp4ultimate-server.exe"; fi
     # Window mode needs a desktop: on Windows the real one; elsewhere a 5760x1080 Xvfb
     # screen, like an NVIDIA Surround desktop, so the centring is tested for real.
     if [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
@@ -50,7 +66,7 @@ if command -v i686-w64-mingw32-g++ >/dev/null; then
     elif command -v xvfb-run >/dev/null; then
         cfg sh -c 'WINEDEBUG=-all xvfb-run -a -s "-screen 0 1600x1000x24" "${WINE:-wine}" ./gp4ultimate-config.exe --dinput mock_dinput.dll --ini selftest.ini --selftest 2>&1 | grep -v "X connection"; exit "$(grep -c FAIL selftest.ini.selftest.txt)"'
     fi
-    echo "artifacts: $out/win32/dinput8.dll  $out/win32/d3d8.dll  $out/win32/gp4ultimate-devices.exe"
+    echo "artifacts: $out/win32/dinput8.dll  $out/win32/d3d8.dll  $out/win32/gp4ultimate-devices.exe  $out/win32/gp4ultimate-server.exe"
 else
     echo "(no i686-w64-mingw32-g++: skipped the Windows build and end-to-end tests)"
 fi

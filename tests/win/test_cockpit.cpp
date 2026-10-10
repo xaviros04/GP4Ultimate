@@ -20,6 +20,8 @@
 #include "win/cockpit_patch.h"
 #include "win/physics_hook.h"
 #include "win/net_sync.h"
+#include "win/sound_fix.h"
+#include <thread>
 
 using namespace gp4u;
 
@@ -126,7 +128,107 @@ static bool read_exe_bytes(const char* path, uint32_t va, size_t n, std::vector<
     return false;
 }
 
+static void test_against_original(const char* exe);
+
+// GP4 sound crash fix (src/win/sound_fix.cpp): a fake sound object with GP4's vtable layout
+// and fake DirectSound buffers.
+namespace fakesnd {
+struct Buf {
+    void** vt;
+    LONG vol = 0;
+    int sets = 0;
+};
+HRESULT __stdcall get_volume(Buf* b, LONG* v) { *v = b->vol; return 0; }
+HRESULT __stdcall set_volume(Buf* b, LONG v) { b->vol = v; ++b->sets; return 0; }
+void* buf_vt[16];
+uint32_t __fastcall orig_lock(uint8_t*, void*) { return 0x77; }
+void __fastcall orig_set(uint8_t*, void*) {}
+void __fastcall orig_unlock(uint8_t*, void*) {}
+uint32_t __fastcall orig_setvol(uint8_t*, void*, uint32_t, uint32_t) { return 0x77; }
+}  // namespace fakesnd
+
+static void test_sound_fix() {
+    using namespace fakesnd;
+    buf_vt[6] = (void*)&get_volume;
+    buf_vt[15] = (void*)&set_volume;
+    // GP4's SetVolume starts with these bytes; the fix checks them before patching.
+    uint8_t* code = exec_buf(64);
+    const uint8_t start[] = {0x53, 0x56, 0x57, 0x8B, 0x7C, 0x24, 0x14, 0x66, 0x81, 0xFF, 0x10, 0x27};
+    std::memcpy(code, start, sizeof start);
+    static void* vt[64];
+    static void* vt2[4];
+    auto A = [](const void* p) { return (uint32_t)(uintptr_t)p; };
+    vt[0x0C / 4] = (void*)&orig_lock;
+    vt[0x10 / 4] = (void*)&orig_set;
+    vt[0x14 / 4] = (void*)&orig_unlock;
+    vt[0x9C / 4] = code;
+    vt2[1] = code;
+    SoundFixTargets t{A(vt), A(&vt2[1]), A((void*)&orig_lock), A((void*)&orig_set), A((void*)&orig_unlock), A(code)};
+    SoundFixTargets bad = t;
+    bad.lock_fn += 1;
+    std::string why;
+    CHECK(!install_sound_fix(bad, &why));
+    CHECK(install_sound_fix(t, &why));
+    CHECK(vt[0x9C / 4] != code && vt2[1] == vt[0x9C / 4] && vt[0x0C / 4] != (void*)&orig_lock);
+    typedef uint32_t(__fastcall * Lock)(uint8_t*, void*);
+    typedef uint32_t(__fastcall * SetVol)(uint8_t*, void*, uint32_t, uint32_t);
+    auto lock = (Lock)vt[0x0C / 4];
+    auto take = (Lock)vt[0x10 / 4];
+    auto unlock = (Lock)vt[0x14 / 4];
+    auto setvol = (SetVol)vt[0x9C / 4];
+    // The object: vtable, busy flag at +0x3c, buffer table at +0x25c.
+    static uint8_t obj[0x300];
+    static void* table[8];
+    Buf b{buf_vt};
+    *(void**)obj = vt;
+    *(void***)(obj + 0x25C) = table;
+    table[2] = &b;
+    // SetVolume: -volume in hundredths of dB, clamped at 10000, skipped when unchanged.
+    CHECK(setvol(obj, nullptr, 2, 1500) == 0 && b.vol == -1500 && b.sets == 1);
+    CHECK(setvol(obj, nullptr, 2, 1500) == 0 && b.sets == 1);
+    CHECK(setvol(obj, nullptr, 2, 20000) == 0 && b.vol == -10000);
+    CHECK(setvol(obj, nullptr, 3, 100) == 0xBBF);   // empty slot
+    // The crash: the slot is emptied between the two reads (here, by GetVolume itself).
+    struct Freeing { static HRESULT __stdcall gv(Buf* bb, LONG* v) { *v = bb->vol; table[2] = nullptr; return 0; } };
+    static void* free_vt[16];
+    std::memcpy(free_vt, buf_vt, sizeof free_vt);
+    free_vt[6] = (void*)&Freeing::gv;
+    b.vt = free_vt;
+    CHECK(setvol(obj, nullptr, 2, 300) == 0xBBF && b.vol == -10000);   // no call through the empty slot
+    // Busy flag: taken, refused on recursion (as GP4 expects), released.
+    CHECK(lock(obj, nullptr) == 0 && obj[0x3C] == 1);
+    CHECK(lock(obj, nullptr) == 5);
+    unlock(obj, nullptr);
+    CHECK(obj[0x3C] == 0);
+    // Another thread holds it for 60 ms: the lock waits for it instead of failing.
+    std::thread other([&] { take(obj, nullptr); Sleep(60); unlock(obj, nullptr); });
+    while (obj[0x3C] == 0) Sleep(1);
+    DWORD t0 = GetTickCount();
+    CHECK(lock(obj, nullptr) == 0);
+    CHECK(GetTickCount() - t0 >= 30);
+    other.join();
+    unlock(obj, nullptr);
+    // Held forever by another thread: gives up after half a second, as busy.
+    std::thread stuck([&] { take(obj, nullptr); });
+    stuck.join();
+    t0 = GetTickCount();
+    CHECK(lock(obj, nullptr) == 5);
+    CHECK(GetTickCount() - t0 >= 400);
+    unlock(obj, nullptr);
+}
+
 static void test_against_original(const char* exe) {
+    {   // The sound fix's vtable entries and SetVolume bytes are GP4's.
+        SoundFixTargets st = gp4_sound_fix_targets();
+        std::vector<uint8_t> v, f, v2;
+        CHECK(read_exe_bytes(exe, st.vtable, 0xA0, v) && read_exe_bytes(exe, st.setvol_fn, 12, f) &&
+              read_exe_bytes(exe, st.vtable2_setvol, 4, v2));
+        auto dw = [&](const std::vector<uint8_t>& b, size_t o) { uint32_t x = 0; if (b.size() >= o + 4) std::memcpy(&x, &b[o], 4); return x; };
+        CHECK(dw(v, 0x0C) == st.lock_fn && dw(v, 0x10) == st.set_fn && dw(v, 0x14) == st.unlock_fn && dw(v, 0x9C) == st.setvol_fn);
+        CHECK(dw(v2, 0) == st.setvol_fn);
+        const uint8_t start[] = {0x53, 0x56, 0x57, 0x8B, 0x7C, 0x24, 0x14, 0x66, 0x81, 0xFF, 0x10, 0x27};
+        CHECK(f.size() == 12 && std::memcmp(f.data(), start, 12) == 0);
+    }
     std::vector<uint8_t> code, a, b, seven;
     if (!read_exe_bytes(exe, cockpit::kFunc, 0x6A, code) || !read_exe_bytes(exe, cockpit::kMulA, 4, a) ||
         !read_exe_bytes(exe, cockpit::kMulB, 4, b) || !read_exe_bytes(exe, 0x62ee80, 8, seven)) {
@@ -357,6 +459,16 @@ static void test_net_sync() {
                      A((void*)&fake_next_ai), A(&is_master), A(&recv_state), A(&player_car), A(&ai_car),
                      A(&flags32), A(&events), A(&got_mask), A(&my_index), A(&pkt_from), A(&pkt_type),
                      A(&pkt_hdr), A(&pkt_time), A(&catchup), A(&race_time)};
+    // Prediction: 22 fake car records and an update stub (inc dword [esi+0x100]; clc; ret).
+    static std::vector<uint8_t> cars(22 * 0x41C, 0);
+    uint8_t* upd = code + 0x800;
+    const uint8_t stub[] = {0xFF, 0x86, 0x00, 0x01, 0x00, 0x00, 0xF8, 0xC3};
+    std::memcpy(upd, stub, sizeof stub);
+    t.car_base = A(cars.data());
+    t.car_update = A(upd);
+    static uint32_t active_mask = 0, gone_mask = 0;
+    t.active_mask = A(&active_mask);
+    t.gone_mask = A(&gone_mask);
     net_sync_set_clock(&fakenet::now, &fakenet::sleep);
     NetPacerConfig pc;   // window 50 ms, wait <= 50 ms, catch-up <= 3
     pc.window_ms = 50;
@@ -424,9 +536,15 @@ static void test_net_sync() {
     CHECKV(extra == 3, extra);
     call_gp4(site, dummy.data());   // next frame may catch up again
     CHECK(catchup == 0xFF);
-    // Master silent for longer than 500 ms: no pacing.
+    // Master silent for longer than 500 ms (its PC froze): no catch-up steps, but no
+    // running ahead of real time either (an uncapped client ran 18 times too fast).
     clock_ms += 2000; race_time = 90000;
     double w1 = clock_ms;
+    call_gp4(site, dummy.data());
+    CHECKV(clock_ms - w1 >= 49 && clock_ms - w1 <= 51, (long)(clock_ms - w1));
+    CHECK(catchup == 0);
+    race_time = 50000;   // behind the silent master: runs, without extra steps
+    w1 = clock_ms;
     call_gp4(site, dummy.data());
     CHECK(clock_ms == w1 && catchup == 0);
     // GP4's FPU/SSE state survives the C++ step (it does double maths and sleeps).
@@ -435,6 +553,84 @@ static void test_net_sync() {
     player_car = 0; sent.clear();
     call_gp4(site, dummy.data());
     CHECK(sent.empty());
+    // Prediction of late remote cars: car 3 is another player's (+0x414 0x80), car 5 this
+    // PC's (0xC0), car 7 an AI car. Only car 3 gets GP4's update, and only when no packet
+    // replaced it, at most 2 steps in a row.
+    {
+        auto rec = [&](int i) { return cars.data() + i * 0x41C; };
+        auto updates = [&](int i) { uint32_t v; std::memcpy(&v, rec(i) + 0x100, 4); return v; };
+        rec(3)[0x414] = 0x80;
+        rec(5)[0x414] = 0xC0;
+        rec(7)[0x414] = 0x00;
+        queue.clear();
+        net_sync_set_prediction(true, 2);
+        call_gp4(site, dummy.data());   // first look
+        call_gp4(site, dummy.data());   // no packet seen yet: the grid, nothing predicted
+        CHECK(updates(3) == 0);
+        rec(3)[0] = 1;                  // a packet arrived
+        call_gp4(site, dummy.data());
+        CHECK(updates(3) == 0);
+        call_gp4(site, dummy.data());   // late: predicted
+        call_gp4(site, dummy.data());
+        call_gp4(site, dummy.data());   // the third late step is not
+        CHECK(updates(3) == 2 && updates(5) == 0 && updates(7) == 0);
+        CHECK(net_sync_stats().predicted == 2);
+        rec(3)[0] = 2;                  // next packet: predicting again when late
+        call_gp4(site, dummy.data());
+        call_gp4(site, dummy.data());
+        CHECK(updates(3) == 3);
+        rec(3)[0xE5] = 4;               // its player left: never
+        call_gp4(site, dummy.data());
+        call_gp4(site, dummy.data());
+        CHECK(updates(3) == 3);
+        net_sync_set_prediction(false, 30);
+        rec(3)[0xE5] = 0;
+        rec(3)[0] = 3;
+        call_gp4(site, dummy.data());
+        call_gp4(site, dummy.data());
+        CHECK(updates(3) == 3);         // off: nothing
+    }
+    // A player whose game crashed (no more packets) is taken out after 10 s: the director
+    // announces it in its events; a silent director is taken out by each client itself.
+    {
+        auto run = [&](double secs, std::vector<Pkt> each, uint32_t watch, uint32_t* where) {
+            bool seen = false;
+            for (double end = clock_ms + secs * 1000; clock_ms < end;) {
+                clock_ms += 16;
+                queue = each;
+                race_time = (uint32_t)clock_ms;
+                call_gp4(site, dummy.data());
+                if (*where & watch) seen = true;
+            }
+            return seen;
+        };
+        unsigned before = net_sync_stats().dropped;
+        // Director: players 1 and 2 send, then 1 goes silent.
+        is_master = 0xFF; my_index = 0; player_car = 0x5000; active_mask = 0x7; events = 0;
+        call_gp4(site, dummy.data());   // (after the pause above: a new race)
+        CHECK(!run(1, {{true, 1, 1, 0, 6, 0}, {true, 2, 1, 0, 6, 0}}, 0x6, &events));
+        CHECK(!run(9, {{true, 2, 1, 0, 6, 0}}, 0x2, &events));   // 9 s: not yet
+        CHECK(run(1.5, {{true, 2, 1, 0, 6, 0}}, 0x2, &events));  // 10 s: taken out
+        CHECK(net_sync_stats().dropped == before + 1);
+        active_mask = 0x5;   // GP4 took it out
+        CHECK(!run(1, {{true, 2, 1, 0, 6, 0}}, 0x2, &events) && net_sync_stats().dropped == before + 1);
+        // Client: the director (2) and player 3 go silent; only the director is taken out
+        // here (player 3 is the director's to announce).
+        is_master = 0; my_index = 1; active_mask = 0xE; gone_mask = 0;
+        clock_ms += 5000;    // a new race
+        CHECK(!run(1, {{true, 2, 1, 0x80, 6, 0}, {true, 3, 1, 0, 6, 0}}, 0xC, &gone_mask));
+        CHECK(run(11, {}, 0x4, &gone_mask));
+        CHECK(!(gone_mask & 0x8));
+        CHECK(net_sync_stats().dropped == before + 2);
+        // Off: never.
+        net_sync_set_drop_after(0);
+        gone_mask = 0; active_mask = 0xE;
+        clock_ms += 5000;
+        CHECK(!run(1, {{true, 2, 1, 0x80, 6, 0}}, 0x4, &gone_mask));
+        CHECK(!run(12, {}, 0x4, &gone_mask));
+        net_sync_set_drop_after(10000);
+        active_mask = 0; is_master = 0;
+    }
     net_sync_set_clock(nullptr, nullptr);
 }
 
@@ -442,6 +638,7 @@ int main(int argc, char** argv) {
     test_patch_on_signature();
     test_physics_hook();
     test_net_sync();
+    test_sound_fix();
     if (argc > 1) test_against_original(argv[1]);
     else std::printf("(no GP4.exe given: differential test skipped)\n");
     std::printf("[cockpit] %d passed, %d failed\n", g_pass, g_fail);

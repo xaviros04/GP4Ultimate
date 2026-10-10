@@ -2,7 +2,7 @@
 
 A modernisation mod for **Grand Prix 4** (Geoff Crammond / MicroProse, 2002): several controllers as one, telemetry-based force feedback, any resolution, window mode and smooth online races.
 
-[Guía en español](docs/GUIA.md) · [User guide](docs/GUIDE.md) · [Technical notes (Spanish)](docs/GP4-FINDINGS.md)
+[Guía en español](docs/GUIA.md) · [User guide](docs/GUIDE.md) · [Online server](docs/ONLINE.md) · [Technical notes (Spanish)](docs/GP4-FINDINGS.md)
 
 GP4 Ultimate is made of two proxy DLLs that sit next to `GP4.exe`. It never modifies `GP4.exe` or any game file on disk: remove the DLLs and the game is back to normal (see [Uninstalling](docs/GUIDE.md#uninstalling) if you used a custom resolution). It works with the original 2002 executable (the build GP4PP also targets); other builds are detected and the code patches are skipped.
 
@@ -30,6 +30,7 @@ GP4 Ultimate is made of two proxy DLLs that sit next to `GP4.exe`. It never modi
 
 **Online**
 - Original GP4 makes every PC wait for the others' packet at every simulation step, so with any ping the race runs in slow motion (at 40 ms, at 40 % speed). GP4 Ultimate lets every PC run at full speed, keeps the race clocks in step and smooths the other cars' movement. Tested with 3 players over Radmin VPN.
+- **Play over the internet without a VPN or DirectPlay**: a small GP4 Ultimate server (inside the host's GP4, on any PC, or on a Linux VPS) replaces DirectPlay. Only the server opens a port. See [docs/ONLINE.md](docs/ONLINE.md).
 
 **Tools**
 - `gp4ultimate-config.exe`: graphical configurator (English / Spanish). Detects your controllers, assigns axes and buttons by moving them, tests the force-feedback direction and explains every option.
@@ -52,6 +53,7 @@ The full walk-through, online setup and troubleshooting are in the [user guide](
 | `d3d8.dll` | Resolution, window mode, aspect correction. |
 | `gp4ultimate-config.exe` | Configurator. |
 | `gp4ultimate-devices.exe` | Controller diagnostics (console). |
+| `gp4ultimate-server.exe` | Online server, for whoever hosts one outside GP4 ([docs/ONLINE.md](docs/ONLINE.md)). |
 | `gp4ultimate.ini` | Your settings (created by the configurator; plain text). An older `gp4mod.ini` is still read. |
 | `gp4ultimate_reference.ini` | Every option with comments (reference; not read by the mod). |
 | `gp4ultimate.log`, `gp4ultimate_d3d.log` | What the mod found and did. Attach them when reporting a problem. |

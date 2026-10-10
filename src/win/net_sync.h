@@ -37,11 +37,27 @@ struct NetSyncTargets {   // GP4.exe addresses; overridable for the e2e test
     uint32_t pkt_time;    // dword, race time in the packet just received
     uint32_t catchup;     // byte, 0xFF = GP4 runs another step before drawing
     uint32_t race_time;   // dword, local race time (ms)
+    // Prediction of remote cars (core/net_predict.h); 0 = not available.
+    uint32_t car_base = 0;    // first car record (22 x 0x41C)
+    uint32_t car_update = 0;  // GP4's per-car update: esi = car record
+    // Players that stopped sending (their GP4 crashed); 0 = not available.
+    uint32_t active_mask = 0; // dword, players still in the race (bit = player index)
+    uint32_t gone_mask = 0;   // dword, players to take out at the end of the step
 };
 NetSyncTargets gp4_net_sync_targets();
 
 bool install_net_sync(const NetSyncTargets& t, const NetPacerConfig& cfg, std::string* why);
 bool net_sync_installed();
+
+// Remote cars carried on by GP4's own physics while their packet is late
+// (core/net_predict.h); at most max_steps steps in a row.
+void net_sync_set_prediction(bool on, int max_steps);
+
+// A player whose GP4 crashed sends nothing and its car stays on the track, frozen. After
+// `ms` without a packet from it, it is taken out as if it had left the game: the race
+// director announces it (GP4's own path, 0x4459b7), or, if the silent one is the director,
+// every PC takes it out itself and GP4 picks a new director. 0 = never.
+void net_sync_set_drop_after(double ms);
 
 // Called at the start of every redirected step, before any receive (the playout buffer
 // in win/net_hook.cpp gives each sender one race packet per step).
@@ -51,7 +67,7 @@ void net_sync_set_step_callback(void (*on_step)());
 void net_sync_set_clock(double (*now_ms)(), void (*sleep_ms)(int));
 
 struct NetSyncStats {
-    unsigned steps = 0, sent = 0, received = 0, waits = 0, catchups = 0;
+    unsigned steps = 0, sent = 0, received = 0, waits = 0, catchups = 0, predicted = 0, dropped = 0;
     double wait_ms = 0;
     bool lead_known = false;
     double lead_min = 0, lead_max = 0, lead_sum = 0;

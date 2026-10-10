@@ -8,7 +8,7 @@ bin="${1:-$root/build/win32}"
 ver="$(head -n1 "$root/VERSION")"
 out="$root/dist/GP4Ultimate-$ver"
 rm -rf "$out" && mkdir -p "$out"
-for f in dinput8.dll d3d8.dll gp4ultimate-config.exe gp4ultimate-devices.exe; do
+for f in dinput8.dll d3d8.dll gp4ultimate-config.exe gp4ultimate-devices.exe gp4ultimate-server.exe; do
     [[ -f "$bin/$f" ]] || { echo "missing $bin/$f (build first: tests/run_tests.sh)" >&2; exit 1; }
     cp "$bin/$f" "$out/"
 done
@@ -16,6 +16,7 @@ cp "$root/config/gp4ultimate_reference.ini" "$out/"
 cp "$root/README.md" "$out/README.md"
 cp "$root/docs/GUIDE.md" "$out/GUIDE.md"
 cp "$root/docs/GUIA.md" "$out/GUIA.md"
+cp "$root/docs/ONLINE.md" "$out/ONLINE.md"
 cp "$root/LICENSE" "$out/LICENSE.txt"
 cp "$root/THIRD_PARTY_NOTICES.md" "$out/THIRD_PARTY_NOTICES.md"
 if [[ -n "${GP4U_INI:-}" ]]; then cp "$GP4U_INI" "$out/gp4ultimate.ini"; fi

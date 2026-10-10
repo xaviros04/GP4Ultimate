@@ -22,7 +22,10 @@ add_library(gp4u_core STATIC
     src/core/projection.cpp
     src/core/ini_doc.cpp
     src/core/schema.cpp
-    src/core/net_stats.cpp)
+    src/core/net_stats.cpp
+    src/core/net_channel.cpp
+    src/core/net_server.cpp
+    src/core/net_client.cpp)
 target_include_directories(gp4u_core PUBLIC src)
 
 enable_testing()
@@ -32,9 +35,27 @@ add_test(NAME core COMMAND test_core)
 add_executable(test_schema tests/test_schema.cpp)
 target_link_libraries(test_schema gp4u_core)
 add_test(NAME schema COMMAND test_schema ${CMAKE_CURRENT_SOURCE_DIR})
+add_executable(test_online tests/test_online.cpp)
+target_link_libraries(test_online gp4u_core)
+add_test(NAME online COMMAND test_online)
 if (MINGW)
     target_link_options(test_core PRIVATE -static)
     target_link_options(test_schema PRIVATE -static)
+    target_link_options(test_online PRIVATE -static)
+endif()
+
+# Online server (gp4ultimate-server): builds natively too, for a Linux machine or VPS.
+add_library(gp4u_net STATIC src/net/udp.cpp)
+target_link_libraries(gp4u_net PUBLIC gp4u_core)
+if (WIN32)
+    target_link_libraries(gp4u_net PUBLIC ws2_32)
+endif()
+add_executable(gp4ultimate-server tools/server/main.cpp)
+target_link_libraries(gp4ultimate-server PRIVATE gp4u_net)
+if (MSVC)
+    set_property(TARGET gp4u_net gp4ultimate-server PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+elseif (MINGW)
+    target_link_options(gp4ultimate-server PRIVATE -static)
 endif()
 
 if (GP4U_TESTS_ONLY)
@@ -57,11 +78,14 @@ add_library(dinput8 SHARED
     src/win/ffb_engine.cpp
     src/win/cockpit_patch.cpp
     src/win/net_hook.cpp
+    src/win/dplay_online.cpp
+    src/win/crash.cpp
+    src/win/sound_fix.cpp
     src/win/net_sync.cpp
     src/win/net_vtidx.c
     src/win/physics_hook.cpp
     src/win/dinput8.def)
-target_link_libraries(dinput8 PRIVATE gp4u_core dxguid winmm)
+target_link_libraries(dinput8 PRIVATE gp4u_net gp4u_core dxguid winmm)
 set_target_properties(dinput8 PROPERTIES PREFIX "" OUTPUT_NAME "dinput8")
 if (MSVC)
     target_compile_options(dinput8 PRIVATE /W3 /EHsc)
@@ -163,6 +187,7 @@ add_test(NAME proxy_game COMMAND test_proxy game WORKING_DIRECTORY ${E2E_DIR})
 add_test(NAME proxy_gp4 COMMAND test_proxy gp4 WORKING_DIRECTORY ${E2E_DIR})
 add_test(NAME proxy_aligning COMMAND test_proxy aligning WORKING_DIRECTORY ${E2E_DIR})
 add_test(NAME proxy_reenter COMMAND test_proxy reenter WORKING_DIRECTORY ${E2E_DIR})
+add_test(NAME proxy_crash COMMAND test_proxy crash WORKING_DIRECTORY ${E2E_DIR})
 
 # Network log: a GP4-like importer of CoCreateInstance driving the system's DirectPlay.
 add_executable(test_net tests/win/test_net.cpp)
@@ -178,11 +203,26 @@ endif()
 add_dependencies(test_net dinput8)
 add_test(NAME net COMMAND test_net WORKING_DIRECTORY ${E2E_DIR})
 
+# Online through the GP4 Ultimate server: three GP4-like DirectPlay users in one process.
+add_executable(test_dpserver tests/win/test_dpserver.cpp)
+set_target_properties(test_dpserver PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${E2E_DIR}
+                      RUNTIME_OUTPUT_DIRECTORY_RELEASE ${E2E_DIR} RUNTIME_OUTPUT_DIRECTORY_DEBUG ${E2E_DIR})
+if (MSVC)
+    target_link_libraries(test_dpserver PRIVATE dinput8.lib dxguid ole32)
+    set_property(TARGET test_dpserver PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+else()
+    target_link_libraries(test_dpserver PRIVATE -ldinput8 dxguid ole32)
+    target_link_options(test_dpserver PRIVATE -static)
+endif()
+add_dependencies(test_dpserver dinput8)
+add_test(NAME dpserver_local COMMAND test_dpserver local WORKING_DIRECTORY ${E2E_DIR})
+add_test(NAME dpserver_unreachable COMMAND test_dpserver unreachable WORKING_DIRECTORY ${E2E_DIR})
+
 # Cockpit wheel patch: patches a copy of the signature in its own memory and calls through
 # it like GP4 does; with GP4_EXE set it also runs the ORIGINAL function, read at test time
 # from the user's GP4.exe (never committed), and compares bit for bit.
 add_executable(test_cockpit tests/win/test_cockpit.cpp src/win/cockpit_patch.cpp src/win/physics_hook.cpp
-               src/win/net_sync.cpp src/win/log.cpp)
+               src/win/net_sync.cpp src/win/sound_fix.cpp src/win/log.cpp)
 target_include_directories(test_cockpit PRIVATE src)
 set_target_properties(test_cockpit PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${E2E_DIR}
                       RUNTIME_OUTPUT_DIRECTORY_RELEASE ${E2E_DIR} RUNTIME_OUTPUT_DIRECTORY_DEBUG ${E2E_DIR})

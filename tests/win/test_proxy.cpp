@@ -473,6 +473,36 @@ static void run_reenter() {
     }
 }
 
+// Crash report (src/win/crash.cpp): an access violation after the DLL loaded leaves
+// gp4ultimate_crash.txt and .dmp, then the previous filter (this test's) still runs.
+static LONG WINAPI test_filter(EXCEPTION_POINTERS*) {
+    std::ifstream f(g_dir + "\\gp4ultimate_crash.txt");
+    std::stringstream ss;
+    ss << f.rdbuf();
+    std::string t = ss.str();
+    CHECK(t.find("exception 0xc0000005") != std::string::npos);
+    CHECK(t.find("writing address 0x00000010") != std::string::npos);
+    CHECK(t.find("test_proxy.exe+0x") != std::string::npos);
+    CHECK(t.find("code addresses on the stack") != std::string::npos);
+    std::ifstream l(g_dir + "\\gp4ultimate.log");
+    std::stringstream ls;
+    ls << l.rdbuf();
+    CHECK(ls.str().find("==== GP4 crashed") != std::string::npos);
+    std::printf("[crash] %d passed, %d failed\n", g_pass, g_fail);
+    std::fflush(stdout);
+    ExitProcess(g_fail ? 1 : 0);
+}
+
+static void run_crash() {
+    write_ini("telemetry");
+    DeleteFileA((g_dir + "\\gp4ultimate_crash.txt").c_str());
+    SetUnhandledExceptionFilter(test_filter);
+    IDirectInput8A* di = nullptr;
+    DirectInput8Create(GetModuleHandleA(nullptr), DIRECTINPUT_VERSION, IID_IDirectInput8A, (void**)&di, nullptr);
+    volatile int* bad = (volatile int*)0x10;
+    *bad = 1;
+}
+
 int main(int argc, char** argv) {
     char path[MAX_PATH];
     GetModuleFileNameA(nullptr, path, MAX_PATH);
@@ -483,6 +513,7 @@ int main(int argc, char** argv) {
     else if (mode == "gp4") run_gp4(false);
     else if (mode == "aligning") run_gp4(true);
     else if (mode == "reenter") run_reenter();
+    else if (mode == "crash") run_crash();
     else run_telemetry();
     std::printf("[%s] %d passed, %d failed\n", mode.c_str(), g_pass, g_fail);
     return g_fail ? 1 : 0;

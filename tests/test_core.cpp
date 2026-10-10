@@ -18,6 +18,7 @@
 #include "core/mapping.h"
 #include "core/net_pacer.h"
 #include "core/net_playout.h"
+#include "core/net_predict.h"
 #include "core/net_stats.h"
 #include "core/paths.h"
 #include "core/projection.h"
@@ -792,8 +793,12 @@ static void test_net_pacer() {
     CHECK(p.decide((int32_t)m - 80, now, 3) == A::Run);
     // Waiting works: the master's estimate moves on with real time.
     CHECK(p.decide((int32_t)m + 80, now + 40, 0) == A::Run);
-    // Master silent for longer than hold_ms: no pacing at all.
-    CHECK(p.decide((int32_t)m + 5000, now + 600, 0) == A::Run);
+    // Master silent for longer than hold_ms: no catch-up, but still no running ahead of
+    // real time (a client without a frame limit ran the race 18 times too fast).
+    CHECK(p.decide((int32_t)m + 5000, now + 600, 0) == A::Wait);
+    CHECK(p.decide((int32_t)m + 600, now + 600, 0) == A::Run);   // real-time pace: fine
+    CHECK(p.decide((int32_t)m - 5000, now + 600, 0) == A::Run);  // behind: no extra steps
+    CHECK(p.decide((int32_t)m + 30000, now + 20000, 0) == A::Wait);
     // A new session (race clock back to 0) restarts the rate measurement, keeps the rate.
     p.on_master(0, now + 700);
     CHECK(p.master_now(now + 710, m) && m > 5 && m < 15);
@@ -850,6 +855,24 @@ static void test_net_playout() {
     CHECK(p.pop(t, m) && m.data[0] == 99);
     p.unpop(m);
     CHECK(p.pop(t, m) && m.data[0] == 99 && !p.pop(t, m));
+    // A backlog after a pause: only the newest 4 state packets per sender are kept, but a
+    // packet announcing something (departure mask, leaving player) is never left out.
+    {
+        NetPlayout b;
+        auto st = [](uint8_t seq, uint8_t hdr = 0, uint32_t mask = 0) {
+            M x{7, 0, {seq, 0, 0, 0, 2, 1, hdr, 0, 0x23, 0, 0, 0, (uint8_t)mask, 0, 0, 0}};
+            return x;
+        };
+        for (uint8_t i = 0; i < 50; ++i) b.push(st(i));
+        b.push(st(50, 0, 0x4));    // the director takes player 2 out
+        b.push(st(51, 0x40));      // a player leaving
+        for (uint8_t i = 52; i < 200; ++i) b.push(st(i));
+        CHECK(b.held(7) == 4 + 2 && b.dropped() == 200 - 6);
+        std::vector<int> seqs;
+        while (b.pop(0, m)) seqs.push_back(m.data[0]);
+        CHECK((seqs == std::vector<int>{50, 51, 196, 197, 198, 199}));
+        CHECK(NetPlayout::state_only(st(1).data.data(), 16) && !NetPlayout::state_only(st(1, 0x80 | 0x08).data.data(), 16));
+    }
     // Race over (no step for 250 ms): held packets flow out.
     p.push(race(5, 100));
     p.push(race(5, 101));
@@ -861,6 +884,47 @@ static void test_net_playout() {
 
 // gp4ultimate.ini, or an older gp4mod.ini when it is the only one (paths use '\\' like
 // Windows; on other systems that is just part of the file name, which is fine here).
+// Remote car prediction: only network cars of other PCs, only when no packet replaced
+// them, only once packets have been seen, at most N steps in a row.
+static void test_net_predict() {
+    RemotePredictor p(3, 8, 3);
+    uint8_t car[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    const uint8_t remote = 0x80, local = 0xC0, ai = 0;
+    CHECK(!p.due(0, car, remote, 0));   // first look
+    p.seen(0, car);
+    CHECK(!p.due(0, car, remote, 0));   // unchanged, but no packet seen yet (grid)
+    p.seen(0, car);
+    car[0] = 9;                         // a packet replaced it
+    CHECK(!p.due(0, car, remote, 0));
+    p.seen(0, car);
+    for (int i = 0; i < 3; ++i) {       // late: predicted, at most 3 steps in a row
+        CHECK(p.due(0, car, remote, 0));
+        car[1] = (uint8_t)(20 + i);     // (the update moved it)
+        p.seen(0, car);
+    }
+    CHECK(!p.due(0, car, remote, 0) && p.run(0) == 3);
+    p.seen(0, car);
+    car[2] = 99;                        // the packet arrives: count starts again
+    CHECK(!p.due(0, car, remote, 0) && p.run(0) == 0);
+    p.seen(0, car);
+    CHECK(p.due(0, car, remote, 0));
+    CHECK(p.predicted() == 4);
+    // Never this PC's car, an AI car, or a car whose player left.
+    uint8_t other[8] = {};
+    for (uint8_t f : {local, ai}) {
+        p.seen(1, other);
+        other[0]++;
+        CHECK(!p.due(1, other, f, 0));
+        p.seen(1, other);
+        CHECK(!p.due(1, other, f, 0));
+    }
+    p.seen(2, other);
+    other[0]++;
+    CHECK(!p.due(2, other, remote, 0));
+    p.seen(2, other);
+    CHECK(!p.due(2, other, remote, RemotePredictor::kGone));
+}
+
 static void test_config_file() {
     std::string dir = "test_paths_dir";
     std::remove((dir + "\\gp4ultimate.ini").c_str());
@@ -892,6 +956,7 @@ int main() {
     test_net_pacer();
     test_config_file();
     test_net_playout();
+    test_net_predict();
     test_textures();
     test_projection();
     std::printf("%d passed, %d failed\n", g_pass, g_fail);

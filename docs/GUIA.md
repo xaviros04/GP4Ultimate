@@ -16,7 +16,7 @@
 
 - Grand Prix 4 instalado, con el `GP4.exe` estándar (6.275.072 bytes, sha256 que empieza por `2046f390`). Con otro ejecutable los mandos y el force feedback siguen funcionando, pero los parches de código (menú de resolución, volante del cockpit, online, fuerzas de frenada) se desactivan y el log lo indica.
 - Windows 10 u 11.
-- Para jugar online: la característica de Windows **DirectPlay** (Panel de control → Programas → Activar o desactivar las características de Windows → Componentes heredados → DirectPlay).
+- Para jugar online con DirectPlay (no hace falta con un [servidor de GP4 Ultimate](#carreras-online)): la característica de Windows **DirectPlay** (Panel de control → Programas → Activar o desactivar las características de Windows → Componentes heredados → DirectPlay).
 - Opcional: [d3d8to9](https://github.com/crosire/d3d8to9) o dgVoodoo2 si ya los usas con GP4 (ver [Encadenar otras DLL](#encadenar-otras-dll)).
 
 ## Instalación
@@ -107,7 +107,16 @@ Si usas d3d8to9 o dgVoodoo2, renombra su `d3d8.dll` (por ejemplo a `d3d8to9.dll`
 
 ## Carreras online
 
-GP4 juega online con DirectPlay. Por internet funciona bien una red local virtual como **Radmin VPN** o ZeroTier.
+Hay dos formas de conectarse:
+
+- **Un servidor de GP4 Ultimate** (recomendado): sin VPN, sin DirectPlay y sin abrir puertos en los PCs de los jugadores. Alguien pone el servidor, todos escriben su dirección en **Online** → **Servidor de partidas**, y listo. El servidor puede ir dentro del propio GP4 del anfitrión (`local`). Detalles en [Online play through the GP4 Ultimate server](ONLINE.md) (en inglés); lo esencial:
+  1. Quien lleve el servidor pone **Servidor de partidas** = `local`, abre (redirige) en el router el puerto **UDP 24004** hacia su PC y permite `GP4.exe` cuando lo pregunte el firewall de Windows (puede salir detrás de la ventana del juego).
+  2. Los demás escriben su IP pública (busca "cuál es mi IP") en **Servidor de partidas**.
+  3. En GP4, partida en red por **TCP/IP**: la partida aparece con el nombre de quien la crea (`Alex 1/22`).
+  También puede ir en un PC que esté siempre encendido (`gp4ultimate-server.exe`) o en un servidor Linux en la nube, y así nadie tiene que abrir nada en casa.
+- **DirectPlay**, como el juego original: por internet necesita una red local virtual como **Radmin VPN** o ZeroTier. Deja **Servidor de partidas** vacío. [Paso a paso](#paso-a-paso-directplay).
+
+En los dos casos, en GP4 se elige **TCP/IP**, uno crea la partida y los demás entran desde la lista.
 
 ### Qué cambia GP4 Ultimate
 
@@ -119,7 +128,7 @@ GP4 original hace esperar a cada PC, en cada paso de la simulación, a los paque
 
 Todos deben usar la **misma versión** de GP4 Ultimate. A los amigos que solo quieran jugar online les valen los valores por defecto: el configurador solo hace falta para los mandos.
 
-### Paso a paso
+### Paso a paso (DirectPlay)
 
 1. Todos en la misma red de Radmin VPN.
 2. En cada PC: DirectPlay activado, y el firewall de Windows permitiendo `GP4.exe` y `C:\Windows\SysWOW64\dplaysvr.exe` (Panel de control → Firewall de Windows Defender → Permitir una aplicación). La red de Radmin, como **Privada** (Configuración → Red → el adaptador de Radmin VPN → Perfil de red).
@@ -133,6 +142,8 @@ Todos deben usar la **misma versión** de GP4 Ultimate. A los amigos que solo qu
 - `gp4ultimate.log` escribe cada segundo una línea `netsync` (pasos, paquetes, diferencia de reloj, esperas). Adjunta los logs de todos los jugadores al informar de un problema.
 
 ### Si alguien no puede entrar
+
+Con un servidor de GP4 Ultimate, mira las líneas `net:` de `gp4ultimate.log`: `connected to the server` es que todo va bien; `no answer from the server` es que la dirección está mal, el servidor no está en marcha o su puerto UDP no está abierto ([más](ONLINE.md#troubleshooting)). Con DirectPlay:
 
 | Síntoma | Causa | Solución |
 |---|---|---|

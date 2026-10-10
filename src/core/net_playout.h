@@ -13,6 +13,7 @@
 //
 // Pure C++, no Windows: unit-tested in tests/test_core.cpp.
 #pragma once
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <map>
@@ -25,6 +26,7 @@ public:
     struct Msg {
         uint32_t from = 0, to = 0;
         std::vector<uint8_t> data;
+        uintptr_t origin = 0;   // where it was received: DirectPlay system messages point into it
     };
 
     // GP4 race state packet (type 1, not a menu message, not from DirectPlay itself).
@@ -32,11 +34,39 @@ public:
         return from != 0 && n >= 8 && (d[3] & 0x80) == 0 && d[5] == 1;
     }
 
+    // A packet that only carries state (cars, clock, seed): an older one is worthless once a
+    // newer one is there. Not those that announce something (a player leaving, the race's
+    // events, a departure mask), which GP4 must see.
+    static bool state_only(const uint8_t* d, size_t n) {
+        if (n < 12 || (d[6] & 0x4C)) return false;
+        uint32_t flags = (uint32_t)d[8] | (uint32_t)d[9] << 8 | (uint32_t)d[10] << 16 | (uint32_t)d[11] << 24;
+        if (flags & 0x20) {
+            if (n < 16) return false;
+            if (d[12] | d[13] | d[14] | d[15]) return false;
+        }
+        return true;
+    }
+
     void push(Msg m) {
-        if (is_race_state(m.from, m.data.data(), m.data.size()))
-            paced_[m.from].q.push_back(std::move(m));
-        else
+        if (!is_race_state(m.from, m.data.data(), m.data.size())) {
             now_.push_back(std::move(m));
+            return;
+        }
+        auto& q = paced_[m.from].q;
+        q.push_back(std::move(m));
+        // After a pause of this PC (a stall, a loading screen) hundreds of packets wait;
+        // handing them all to GP4 in one step is what preceded two crashes. Keep the newest.
+        size_t plain = 0;
+        for (auto& x : q) plain += state_only(x.data.data(), x.data.size());
+        for (auto it = q.begin(); plain > kMaxHeld && it != q.end();) {
+            if (state_only(it->data.data(), it->data.size())) {
+                it = q.erase(it);
+                --plain;
+                ++dropped_;
+            } else {
+                ++it;
+            }
+        }
     }
 
     // A simulation step starts: each sender may deliver one more packet.
@@ -89,8 +119,10 @@ public:
     }
     unsigned delivered() const { return delivered_; }
     unsigned caught_up() const { return caught_up_; }
+    unsigned dropped() const { return dropped_; }   // stale packets left out of a backlog
 
     static constexpr double kIdleMs = 250;   // no step for this long: not racing
+    static constexpr size_t kMaxHeld = 4;    // state-only race packets kept per sender
 
 private:
     struct Sender {
@@ -102,7 +134,7 @@ private:
     bool stepping_ = false;
     double last_step_ms_ = 0;
     uint64_t step_ = 0;
-    unsigned delivered_ = 0, caught_up_ = 0;
+    unsigned delivered_ = 0, caught_up_ = 0, dropped_ = 0;
 };
 
 }  // namespace gp4u

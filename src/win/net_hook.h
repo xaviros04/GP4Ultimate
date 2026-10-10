@@ -12,6 +12,11 @@ namespace gp4u {
 // through core/net_playout.h (free-running races, win/net_sync.h).
 void install_net_hooks(int dumps, bool log, bool playout);
 
+// Who directs online races (clock and AI cars): 0 GP4 decides (the fastest PC), 1 this PC
+// if possible, 2 another PC if possible, 3 auto (through the server: the best connection
+// to it; with DirectPlay GP4 decides). Applied when the game is created or joined.
+void net_set_race_director(int mode);
+
 // Free-running races: a simulation step starts (called by net_sync before its receives).
 void net_playout_begin_step();
 struct NetPlayoutCounts {

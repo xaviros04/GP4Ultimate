@@ -12,6 +12,9 @@
 #include <vector>
 
 #include "cockpit_patch.h"
+#include "crash.h"
+#include "sound_fix.h"
+#include "dplay_online.h"
 #include "net_hook.h"
 #include "net_sync.h"
 #include "physics_hook.h"
@@ -61,6 +64,7 @@ static void load_settings() {
     bool legacy = false;
     s.ini.load_file(config_file(s.dir, &legacy));
     if (s.ini.get_bool("general", "log", true)) log_open(s.dir + "\\gp4ultimate.log");
+    if (s.ini.get_bool("general", "crash_report", true)) install_crash_handler(s.dir);
     if (legacy) logf("config: reading the old gp4mod.ini (open gp4ultimate-config.exe and save to rename it)");
     logf("GP4 Ultimate %s (dinput8.dll) loaded from %s", kVersion, s.dir.c_str());
 
@@ -107,7 +111,23 @@ static void load_settings() {
     // Network log (diagnostics for the online work): DirectPlay calls and traffic.
     bool net_log = s.ini.get_bool("net", "log", true), freerun = s.ini.get_bool("net", "freerun", true);
     bool playout = freerun && s.ini.get_bool("net", "playout", true);
-    if (net_log || playout) install_net_hooks((int)s.ini.get_int("net", "dump_packets", 3), net_log, playout);
+    // Online through the GP4 Ultimate server instead of DirectPlay ([net] server).
+    OnlineConfig oc;
+    oc.server = s.ini.get("net", "server", "");
+    oc.port = (uint16_t)s.ini.get_int("net", "server_port", oc.port);
+    oc.room = s.ini.get("net", "room", "");
+    online_setup(oc);
+    if (online_active()) logf("net: online through the GP4 Ultimate server: %s", online_summary().c_str());
+    // Race director: "auto" = through the server, the PC with the best connection to it (the
+    // server PC itself when server = local); with DirectPlay GP4 chooses (the fastest PC).
+    std::string director = s.ini.get("net", "race_director", "auto");
+    int dmode = director == "prefer" ? 1 : director == "avoid" ? 2 : (director == "auto" && online_active()) ? 3 : 0;
+    if (director != "auto" && director != "prefer" && director != "avoid" && director != "gp4")
+        logf("net: race_director = '%s' not understood (auto, gp4, prefer or avoid): GP4 decides", director.c_str());
+    if (net_log || playout || online_active() || dmode) {
+        install_net_hooks((int)s.ini.get_int("net", "dump_packets", 3), net_log, playout);
+        net_set_race_director(dmode);
+    }
 
     // Free-running online races: no waiting for the other machines every step.
     if (freerun) {
@@ -117,6 +137,11 @@ static void load_settings() {
         pc.max_catchup = (int)s.ini.get_int("net", "max_catchup", pc.max_catchup);
         std::string why;
         net_sync_set_step_callback(playout ? net_playout_begin_step : nullptr);
+        bool predict = s.ini.get_bool("net", "predict", false);
+        int predict_steps = (int)s.ini.get_int("net", "predict_max_steps", 30);
+        net_sync_set_prediction(predict, predict_steps);
+        net_sync_set_drop_after(s.ini.get_double("net", "drop_silent_after_s", 10) * 1000);
+        if (predict) logf("net: prediction of late remote cars on (at most %d steps in a row, experimental)", predict_steps);
         if (install_net_sync(gp4_net_sync_targets(), pc, &why))
             logf("net: free-running races on (clock window %.0f ms, wait <= %.0f ms, catch-up <= %d steps)",
                  pc.window_ms, pc.max_wait_ms, pc.max_catchup);
@@ -125,6 +150,14 @@ static void load_settings() {
     }
 
     // Cockpit steering wheel turning like the physical one (GP4.exe 0x409a47).
+    // GP4's sound code can crash when its timer thread changes a volume while the game
+    // frees that sound (win/sound_fix.h).
+    if (s.ini.get_bool("general", "fix_sound_crash", true)) {
+        std::string why;
+        if (install_sound_fix(gp4_sound_fix_targets(), &why)) logf("sound: GP4's sound crash fix on (busy flag made atomic, volume change re-checks its sound)");
+        else logf("sound: crash fix not installed: %s", why.c_str());
+    }
+
     double rot = s.ini.get_double("cockpit", "wheel_rotation_deg", 360.0);
     if (rot > 0) {
         std::string why;

@@ -7,6 +7,8 @@
 #include <dplay.h>
 #include <dplobby.h>
 
+#include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -14,6 +16,7 @@
 
 #include "core/net_playout.h"
 #include "core/net_stats.h"
+#include "dplay_online.h"
 #include "log.h"
 
 extern "C" {
@@ -87,8 +90,8 @@ void flush_stats(double t, double period = 1.0) {
     }
     if (any && g_playout_on && g_playout.delivered() != g_playout_logged) {
         g_playout_logged = g_playout.delivered();
-        nlog("net: playout: %u race packets delivered paced, %u to catch up a sender (totals)", g_playout.delivered(),
-             g_playout.caught_up());
+        nlog("net: playout: %u race packets delivered paced, %u to catch up a sender, %u stale ones left out (totals)",
+             g_playout.delivered(), g_playout.caught_up(), g_playout.dropped());
     }
 }
 
@@ -205,28 +208,103 @@ struct EnumCtx {
     LPDPENUMSESSIONSCALLBACK2 cb;
     LPVOID ctx;
     int found;
+    std::string list;
 };
 
-BOOL FAR PASCAL enum_sessions_cb(LPCDPSESSIONDESC2 d, LPDWORD timeout, DWORD flags, LPVOID ctx) {
+// GP4's games menu lists asynchronously, every frame: log a call only when its flags or
+// what it found change, or every 30 s.
+struct EnumLog {
+    DWORD flags = ~0u;
+    std::string found;
+    double t = -1e9;
+    unsigned quiet = 0;
+} g_enum_log;
+
+BOOL FAR PASCAL enum_sessions_quiet(LPCDPSESSIONDESC2 d, LPDWORD timeout, DWORD flags, LPVOID ctx) {
     auto* c = (EnumCtx*)ctx;
-    if (flags & DPESC_TIMEDOUT) nlog("net:   EnumSessions round finished (%d sessions so far)", c->found);
-    else { ++c->found; nlog("net:   session found: %s", describe_session(d).c_str()); }
+    if (!(flags & DPESC_TIMEDOUT)) {
+        ++c->found;
+        c->list += describe_session(d) + "\n";
+    }
     return c->cb(d, timeout, flags, c->ctx);
 }
 
 HRESULT STDMETHODCALLTYPE h_EnumSessions(void* self, LPDPSESSIONDESC2 d, DWORD timeout, LPDPENUMSESSIONSCALLBACK2 cb, LPVOID ctx, DWORD flags) {
-    nlog("net: EnumSessions timeout %lu flags 0x%lx", (unsigned long)timeout, (unsigned long)flags);
-    EnumCtx c{cb, ctx, 0};
-    HRESULT hr = o_EnumSessions(self, d, timeout, cb ? enum_sessions_cb : nullptr, cb ? (LPVOID)&c : ctx, flags);
-    if (FAILED(hr)) nlog("net: EnumSessions -> 0x%08lx", (unsigned long)hr);
+    EnumCtx c{cb, ctx, 0, {}};
+    HRESULT hr = o_EnumSessions(self, d, timeout, cb ? enum_sessions_quiet : nullptr, cb ? (LPVOID)&c : ctx, flags);
+    double t = now();
+    std::lock_guard<std::mutex> lk(g_mtx);
+    EnumLog& L = g_enum_log;
+    if (flags != L.flags || c.list != L.found || t - L.t >= 30 || FAILED(hr)) {
+        nlog("net: EnumSessions timeout %lu flags 0x%lx -> 0x%08lx, %d sessions%s", (unsigned long)timeout,
+             (unsigned long)flags, (unsigned long)hr, c.found,
+             L.quiet ? (" (" + std::to_string(L.quiet) + " identical calls not logged)").c_str() : "");
+        size_t p = 0;
+        for (size_t e; (e = c.list.find('\n', p)) != std::string::npos; p = e + 1)
+            nlog("net:   session found: %s", c.list.substr(p, e - p).c_str());
+        L.flags = flags;
+        L.found = c.list;
+        L.t = t;
+        L.quiet = 0;
+    } else {
+        ++L.quiet;
+    }
     return hr;
 }
 
 HRESULT STDMETHODCALLTYPE h_GetMessageCount(void* self, DPID id, LPDWORD n) { return o_GetMessageCount(self, id, n); }
 
+// Race director choice ([net] race_director). GP4 times a loop at start-up (0x54c746,
+// result in [0x833c98]), every PC sends that time when it creates or joins a game, and the
+// fastest PC directs the race (0x541b03 orders the players by it, 0x4456c7 makes the
+// first one the director). Writing another value right after Open, before GP4 reads it
+// (0x53f80f creating, 0x5401a8 joining), picks the role:
+//   prefer 1, avoid 0x7ffffff0, and auto (online through the server) 1000 + 10 x the
+//   round trip to the server plus twice its jitter, in ms: the best connection directs.
+//   Every PC on the server uses the same scale; the server PC itself (local) is at ~0.
+int g_director = 0;   // 0 GP4 decides, 1 prefer, 2 avoid, 3 auto
+
+bool readable(uintptr_t a, size_t n) {
+    MEMORY_BASIC_INFORMATION mbi;
+    if (!VirtualQuery((void*)a, &mbi, sizeof mbi) || mbi.State != MEM_COMMIT) return false;
+    if (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return false;
+    return a + n <= (uintptr_t)mbi.BaseAddress + mbi.RegionSize;
+}
+
+void apply_race_director() {
+    if (!g_director) return;
+    uint32_t want;
+    char why[96];
+    if (g_director == 1) {
+        want = 1;
+        std::snprintf(why, sizeof why, "this PC if possible");
+    } else if (g_director == 2) {
+        want = 0x7FFFFFF0u;
+        std::snprintf(why, sizeof why, "another PC if possible");
+    } else {
+        double rtt, jit;
+        if (!online_open_quality(rtt, jit)) return;   // DirectPlay: GP4 decides
+        double score = rtt + 2 * jit;
+        want = 1000 + (uint32_t)std::min(1e8, score * 10);
+        std::snprintf(why, sizeof why, "the best connection (here %.1f ms round trip, %.1f ms jitter)", rtt, jit);
+    }
+    static const uint8_t host_read[] = {0x8B, 0x1D, 0x98, 0x3C, 0x83, 0x00};   // mov ebx, [0x833c98]
+    static const uint8_t join_read[] = {0xA1, 0x98, 0x3C, 0x83, 0x00};         // mov eax, [0x833c98]
+    if (!readable(0x53F80F, sizeof host_read) || std::memcmp((void*)0x53F80F, host_read, sizeof host_read) ||
+        !readable(0x5401A8, sizeof join_read) || std::memcmp((void*)0x5401A8, join_read, sizeof join_read) ||
+        !readable(0x833C98, 4)) {
+        nlog("net: race director (%s) not applied: other GP4 build", why);
+        return;
+    }
+    uint32_t* speed = (uint32_t*)0x833C98;
+    nlog("net: race director: %s; start-up speed test %lu replaced by %lu", why, (unsigned long)*speed, (unsigned long)want);
+    *speed = want;
+}
+
 HRESULT STDMETHODCALLTYPE h_Open(void* self, LPDPSESSIONDESC2 d, DWORD flags) {
     std::string desc = describe_session(d);
     HRESULT hr = o_Open(self, d, flags);
+    if (SUCCEEDED(hr)) apply_race_director();   // GP4 reads the value right after Open
     nlog("net: Open %s %s -> 0x%08lx", (flags & DPOPEN_CREATE) ? "CREATE (host)" : (flags & DPOPEN_JOIN) ? "JOIN" : "?",
          desc.c_str(), (unsigned long)hr);
     return hr;
@@ -240,6 +318,19 @@ void note_received(double t, DPID from, const void* data, DWORD size) {
         nlog("net: system message 0x%04lx (%s)", (unsigned long)type, sysmsg_name(type));
     } else if (g_stats) {
         g_stats->on_recv(t, from, (const uint8_t*)data, size);
+    }
+}
+
+// DirectPlay system messages hold pointers to their own strings (player and session names):
+// a message received at `from` and handed over at `to` gets them moved along.
+void relocate(std::vector<uint8_t>& m, uintptr_t from, uintptr_t to) {
+    for (size_t off = 0; off + sizeof(uintptr_t) <= m.size(); off += sizeof(uint32_t)) {
+        uintptr_t v;
+        std::memcpy(&v, &m[off], sizeof v);
+        if (v >= from && v < from + m.size()) {
+            v = to + (v - from);
+            std::memcpy(&m[off], &v, sizeof v);
+        }
     }
 }
 
@@ -263,6 +354,7 @@ HRESULT receive_paced(void* self, LPDPID from, LPDPID to, DWORD flags, LPVOID da
         m.from = f;
         m.to = d;
         m.data.assign(g_rxbuf.data(), g_rxbuf.data() + n);
+        m.origin = (uintptr_t)g_rxbuf.data();
         g_playout.push(std::move(m));
     }
     NetPlayout::Msg m;
@@ -275,6 +367,7 @@ HRESULT receive_paced(void* self, LPDPID from, LPDPID to, DWORD flags, LPVOID da
         g_playout.unpop(std::move(m));
         return DPERR_BUFFERTOOSMALL;
     }
+    if (m.from == DPID_SYSMSG) relocate(m.data, m.origin, (uintptr_t)data);
     std::memcpy(data, m.data.data(), m.data.size());
     *size = (DWORD)m.data.size();
     if (from) *from = m.from;
@@ -387,6 +480,19 @@ void hook_dplay(void* obj) {
 }
 
 HRESULT WINAPI h_CoCreateInstance(REFCLSID clsid, LPUNKNOWN outer, DWORD ctx, REFIID riid, LPVOID* out) {
+    // [net] server: GP4 gets the GP4 Ultimate server client instead of DirectPlay.
+    if (online_active() && (clsid == CLSID_DirectPlay || clsid == CLSID_DirectPlayLobby)) {
+        bool dp = clsid == CLSID_DirectPlay;
+        HRESULT hr = outer ? CLASS_E_NOAGGREGATION : dp ? online_create_dplay(riid, out) : online_create_lobby(riid, out);
+        nlog("net: CoCreateInstance(%s, %s) -> 0x%08lx (GP4 Ultimate server, not DirectPlay)",
+             dp ? "DirectPlay" : "DirectPlayLobby", guid_str(&riid).c_str(), (unsigned long)hr);
+        if (dp && SUCCEEDED(hr) && out && *out) {
+            std::lock_guard<std::mutex> lk(g_mtx);
+            if (!g_stats && g_log) g_stats.reset(new NetStats(g_dumps));
+            hook_dplay(*out);
+        }
+        return hr;
+    }
     HRESULT hr = o_CoCreateInstance(clsid, outer, ctx, riid, out);
     if (clsid == CLSID_DirectPlay) {
         nlog("net: CoCreateInstance(DirectPlay, %s) -> 0x%08lx%s", guid_str(&riid).c_str(), (unsigned long)hr,
@@ -455,6 +561,8 @@ void net_playout_begin_step() {
     std::lock_guard<std::mutex> lk(g_mtx);
     g_playout.begin_step(now() * 1000.0);
 }
+
+void net_set_race_director(int mode) { g_director = mode; }
 
 NetPlayoutCounts net_playout_counts() {
     std::lock_guard<std::mutex> lk(g_mtx);

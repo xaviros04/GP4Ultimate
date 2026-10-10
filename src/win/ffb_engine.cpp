@@ -455,7 +455,12 @@ void FfbEngine::run() {
     unsigned long ticks = 0;
     uint32_t effect_gen = 0;
     double next_check = 0;
-    unsigned recreated = 0, restarted = 0, errors = 0;
+    unsigned recreated = 0, restarted = 0, errors = 0, slow_driver = 0;
+    auto now_s = [&] {
+        LARGE_INTEGER x;
+        QueryPerformanceCounter(&x);
+        return (double)(x.QuadPart - t0.QuadPart) / freq.QuadPart;
+    };
     // Problems repeat at 500 Hz: log the first few, then every 100th.
     auto worth_logging = [](unsigned n) { return n <= 10 || n % 100 == 0; };
 
@@ -503,6 +508,7 @@ void FfbEngine::run() {
         double out = model.step(in, dt);
 
         std::unique_lock<std::mutex> lk(dm.mutex());
+        double locked_at = now_s();
         if (reset_.exchange(false) && effect) {
             effect->Release();
             effect = nullptr;
@@ -570,7 +576,10 @@ void FfbEngine::run() {
             }
         }
 
+        double held = now_s() - locked_at;
         lk.unlock();
+        if (held > 0.1 && worth_logging(++slow_driver))
+            logf("ffb: the wheel driver took %.0f ms to take the force (#%u)", held * 1000, slow_driver);
 
         if (csv && ticks % csv_every == 0) {
             const FfbComponents& c = model.last();
