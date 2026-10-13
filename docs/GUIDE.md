@@ -84,8 +84,10 @@ The **Cockpit & display** tab.
 
 GP4's graphics menu only offers 4:3 and 5:4 sizes up to 1600x1200.
 
-1. Set **Game resolution** to your size, e.g. `1920x1080`, `2560x1080`, `3440x1440`, `5760x1080`, or `auto` (the desktop's).
+1. Set **Game resolution** to your size, e.g. `1920x1080`, `2560x1440`, `3840x2160`, or `auto` (the desktop's).
 2. Start GP4 and choose **1600x1200** once in its graphics options: that entry now means your resolution.
+
+Ultrawide (`2560x1080`, `3440x1440`) and triple screen (`5760x1080`) are a work in progress: not fully working yet.
 
 In full screen your monitor must support the size. Modern drivers list hundreds of modes and GP4 only reads the first 256, so big resolutions could be missing; when that happens the mod gives GP4 a shorter list with yours first. `gp4ultimate_d3d.log` says what it did, and if your monitor does not have the size it lists the closest ones. Window mode works with any size.
 

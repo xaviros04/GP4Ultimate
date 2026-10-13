@@ -21,7 +21,8 @@ GP4 Ultimate is made of two proxy DLLs that sit next to `GP4.exe`. It never modi
 - Gear change kick, impacts, track bumps from the suspension.
 
 **Display (`d3d8.dll`)**
-- **Any resolution**: 16:9, ultrawide (2560x1080, 3440x1440), triple screen (5760x1080), or `auto` for the desktop's. GP4's menu only offers 4:3 and 5:4 sizes; its "1600x1200" entry becomes your resolution.
+- **Any 16:9 resolution**, or `auto` for the desktop's. GP4's menu only offers 4:3 and 5:4 sizes; its "1600x1200" entry becomes your resolution.
+- Ultrawide (2560x1080, 3440x1440) and triple screen (5760x1080): **work in progress**. Not fully working yet.
 - Full-screen mode list fixed for modern drivers when needed (GP4 only reads the first 256 modes, so large resolutions could be unreachable).
 - Borderless **window mode**, centred (the centre screen with NVIDIA Surround / AMD Eyefinity).
 - Hor+ aspect correction, field-of-view scale, frame capture for diagnostics.

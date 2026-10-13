@@ -84,8 +84,10 @@ La pestaña **Cockpit y pantalla**.
 
 El menú gráfico de GP4 solo ofrece tamaños 4:3 y 5:4 hasta 1600x1200.
 
-1. Pon en **Resolución del juego** tu tamaño, p. ej. `1920x1080`, `2560x1080`, `3440x1440`, `5760x1080`, o `auto` (la del escritorio).
+1. Pon en **Resolución del juego** tu tamaño, p. ej. `1920x1080`, `2560x1440`, `3840x2160`, o `auto` (la del escritorio).
 2. Arranca GP4 y elige **1600x1200** una vez en sus opciones gráficas: esa opción pasa a ser tu resolución.
+
+Ultrapanorámico (`2560x1080`, `3440x1440`) y triple pantalla (`5760x1080`) están en desarrollo: todavía no funcionan del todo bien.
 
 En pantalla completa tu monitor tiene que admitir ese tamaño. Las tarjetas modernas listan cientos de modos y GP4 solo lee los 256 primeros, así que las resoluciones grandes podían no aparecer; cuando pasa, el mod le da a GP4 una lista más corta con la tuya la primera. `gp4ultimate_d3d.log` dice qué ha hecho y, si tu monitor no tiene ese tamaño, lista los más parecidos. En modo ventana vale cualquier tamaño.
 
