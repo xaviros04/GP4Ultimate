@@ -21,6 +21,10 @@
 #include "win/physics_hook.h"
 #include "win/net_sync.h"
 #include "win/sound_fix.h"
+#include "d3d8/wide_fov.h"
+#include "d3d8/menu_aspect.h"
+#include "core/projection.h"
+#include <cmath>
 #include <thread>
 
 using namespace gp4u;
@@ -217,6 +221,103 @@ static void test_sound_fix() {
     unlock(obj, nullptr);
 }
 
+// Hor+ camera stub: called where GP4 computed its vertical FOV, it must leave the near plane
+// below it on the x87 stack (bit for bit), keep the flags GP4 branches on right after, keep
+// every register, and store the wide FOVs in GP4's globals.
+static float g_fov_h, g_fov_v, g_fov_aspect;
+static void test_wide_fov() {
+    WideFovTargets t{0, (uint32_t)(uintptr_t)&g_fov_h, (uint32_t)(uintptr_t)&g_fov_v, (uint32_t)(uintptr_t)&g_fov_aspect};
+    const double ref = 16.0 / 9.0;
+    wide_fov_configure(t, ref);
+    g_fov_h = 1.0f;                      // ~57 deg, as GP4's camera computed it
+    g_fov_aspect = 2560.0f / 1080.0f;    // 21:9
+    g_fov_v = -1;
+    void* stub = wide_fov_stub();
+    float nearv = 0.4f;
+    double top = 0;
+    uint32_t fb = 0, fa = 0, ra = 0, rc = 0, rd = 0;
+    uint16_t sw = 0;
+    unsigned calls = wide_fov_calls();
+    __asm__ volatile(
+        "flds %[nearv]\n"
+        "fld1\n"                        // stands for GP4's half-done value, dropped by the stub
+        "xorl %%eax, %%eax\n"           // ZF = 1
+        "stc\n"                         // CF = 1
+        "movl $0x11111111, %%eax\n"
+        "movl $0x22222222, %%ecx\n"
+        "movl $0x33333333, %%edx\n"
+        "pushfl\n"
+        "popl %[fb]\n"
+        "call *%[stub]\n"
+        "pushfl\n"
+        "popl %[fa]\n"
+        "movl %%eax, %[ra]\n"
+        "movl %%ecx, %[rc]\n"
+        "movl %%edx, %[rd]\n"
+        "fstpl %[top]\n"
+        "fnstsw %%ax\n"
+        "movw %%ax, %[sw]\n"
+        : [fb] "=m"(fb), [fa] "=m"(fa), [ra] "=m"(ra), [rc] "=m"(rc), [rd] "=m"(rd), [top] "=m"(top), [sw] "=m"(sw)
+        : [nearv] "m"(nearv), [stub] "m"(stub)
+        : "eax", "ecx", "edx", "memory", "cc");
+    CHECK(wide_fov_calls() == calls + 1);
+    CHECK(top == (double)0.4f);                 // the near plane, untouched
+    CHECK(((sw >> 11) & 7) == 0);               // and nothing else left on the stack
+    CHECK((fa & 0x41) == (fb & 0x41));          // CF and ZF kept
+    CHECK(ra == 0x11111111 && rc == 0x22222222 && rd == 0x33333333);
+    double t2 = std::tan(0.5);
+    CHECK(std::fabs(g_fov_v - 2 * std::atan(t2 / ref)) < 1e-6);
+    CHECK(std::fabs(g_fov_h - 2 * std::atan(t2 * (2560.0 / 1080.0) / ref)) < 1e-6);
+    CHECK(g_fov_h > 1.0f);                     // wider than GP4's
+    // Up to 16:9 GP4's own result: v = 2 atan(tan(h/2) / aspect), h unchanged.
+    g_fov_h = 1.0f;
+    g_fov_aspect = 4.0f / 3.0f;
+    __asm__ volatile("flds %[nearv]\n fld1\n call *%[stub]\n fstp %%st(0)\n"
+                     : : [nearv] "m"(nearv), [stub] "m"(stub) : "eax", "ecx", "edx", "memory", "cc");
+    CHECK(g_fov_h == 1.0f);
+    CHECK(std::fabs(g_fov_v - 2 * std::atan(t2 / (4.0 / 3.0))) < 1e-6);
+}
+
+// Menu engine size: GP4's SetScreenSize replacement (stdcall, pops its 8 bytes) and the two
+// store stubs (registers and flags kept) give the engine a 16:9 width at most.
+static int g_menu_wh[2];
+static void test_menu_aspect() {
+    MenuSizeTargets t{0, 0, 0, (uint32_t)(uintptr_t)&g_menu_wh[0], (uint32_t)(uintptr_t)&g_menu_wh[1]};
+    menu_aspect_configure(t, 16.0 / 9.0);
+    typedef void(__stdcall * SetSize)(int, int);
+    ((SetSize)menu_setter_fn())(5760, 1080);
+    CHECK(g_menu_wh[0] == 1920 && g_menu_wh[1] == 1080);
+    ((SetSize)menu_setter_fn())(1600, 1200);
+    CHECK(g_menu_wh[0] == 1600 && g_menu_wh[1] == 1200);
+    // init store: w in esi, h in edi.
+    void* stub = menu_init_stub();
+    uint32_t fb = 0, fa = 0, rs = 0, rd = 0, ra = 0, rc = 0;
+    __asm__ volatile(
+        "movl $5760, %%esi\n movl $1080, %%edi\n movl $0x11111111, %%eax\n movl $0x22222222, %%ecx\n"
+        "xorl %%edx, %%edx\n stc\n"
+        "pushfl\n popl %[fb]\n"
+        "call *%[stub]\n"
+        "pushfl\n popl %[fa]\n"
+        "movl %%esi, %[rs]\n movl %%edi, %[rd]\n movl %%eax, %[ra]\n movl %%ecx, %[rc]\n"
+        : [fb] "=m"(fb), [fa] "=m"(fa), [rs] "=m"(rs), [rd] "=m"(rd), [ra] "=m"(ra), [rc] "=m"(rc)
+        : [stub] "m"(stub)
+        : "eax", "ecx", "edx", "esi", "edi", "memory", "cc");
+    CHECK(g_menu_wh[0] == 1920);
+    CHECK((fa & 0x41) == (fb & 0x41));
+    CHECK(rs == 5760 && rd == 1080 && ra == 0x11111111 && rc == 0x22222222);
+    // reset store: w in ecx, h in eax.
+    stub = menu_reset_stub();
+    g_menu_wh[0] = 0;
+    __asm__ volatile(
+        "movl $2560, %%ecx\n movl $1080, %%eax\n"
+        "call *%[stub]\n"
+        "movl %%ecx, %[rc]\n movl %%eax, %[ra]\n"
+        : [rc] "=m"(rc), [ra] "=m"(ra)
+        : [stub] "m"(stub)
+        : "eax", "ecx", "edx", "memory", "cc");
+    CHECK(g_menu_wh[0] == 1920 && rc == 2560 && ra == 1080);
+}
+
 static void test_against_original(const char* exe) {
     {   // The sound fix's vtable entries and SetVolume bytes are GP4's.
         SoundFixTargets st = gp4_sound_fix_targets();
@@ -313,6 +414,42 @@ static void test_against_original(const char* exe) {
         // 0x445a59 begins pushal; call 0x51ef67 (receive); 0x445b89 is mov eax,1; call 0x44587c (send).
         CHECK(read_exe_bytes(exe, 0x445A59, 1, b) && b[0] == 0x60);
         CHECK(read_exe_bytes(exe, 0x445B89, 5, b) && b[0] == 0xB8 && b[1] == 1);
+    }
+    // Hor+ camera site (d3d8/wide_fov.h): the 12 bytes it replaces, GP4's "test bl, bl" before
+    // it and the "jne" right after that depends on those flags.
+    {
+        auto wt = gp4_wide_fov_targets();
+        std::vector<uint8_t> b;
+        CHECK(read_exe_bytes(exe, wt.site, sizeof kWideFovSite, b) && std::memcmp(b.data(), kWideFovSite, b.size()) == 0);
+        CHECK(read_exe_bytes(exe, wt.site + sizeof kWideFovSite, 2, b) && b[0] == 0x75);
+        CHECK(read_exe_bytes(exe, 0x493EB1, 2, b) && b[0] == 0x84 && b[1] == 0xDB);
+        // fstp [aspect] at 0x493e9f and the h load at 0x493eb3 use the globals of the targets.
+        CHECK(read_exe_bytes(exe, 0x493E9F, 6, b) && b[0] == 0xD9 && b[1] == 0x1D);
+        uint32_t g;
+        std::memcpy(&g, b.data() + 2, 4);
+        CHECK(g == wt.aspect);
+        CHECK(read_exe_bytes(exe, 0x493EB3, 6, b) && b[0] == 0xD9 && b[1] == 0x05);
+        std::memcpy(&g, b.data() + 2, 4);
+        CHECK(g == wt.hfov);
+    }
+    // Menu engine size writers (d3d8/menu_aspect.h).
+    {
+        auto mt = gp4_menu_size_targets();
+        std::vector<uint8_t> b;
+        CHECK(read_exe_bytes(exe, mt.setter, sizeof kMenuSetter, b) && std::memcmp(b.data(), kMenuSetter, b.size()) == 0);
+        CHECK(read_exe_bytes(exe, mt.init_store, sizeof kMenuInitStore, b) && std::memcmp(b.data(), kMenuInitStore, b.size()) == 0);
+        CHECK(read_exe_bytes(exe, mt.reset_store, sizeof kMenuResetStore, b) && std::memcmp(b.data(), kMenuResetStore, b.size()) == 0);
+        // The height is stored right after the init store (edi) and right before the reset one (eax).
+        CHECK(read_exe_bytes(exe, mt.init_store + 6, 6, b) && b[0] == 0x89 && b[1] == 0x3D);
+        CHECK(read_exe_bytes(exe, mt.reset_store - 8, 5, b) && b[0] == 0xA3);
+        uint32_t g;
+        std::memcpy(&g, b.data() + 1, 4);
+        CHECK(g == mt.height);
+        // 0x5cc820 pillarboxes to 4:3 when width/height >= 2.0 ([0x5fa6ac]).
+        CHECK(read_exe_bytes(exe, 0x5FA6AC, 4, b));
+        float two;
+        std::memcpy(&two, b.data(), 4);
+        CHECK(two == 2.0f);
     }
     // [display] resolution patch sites (core/gp4_resolution.h) hold exactly the expected
     // instructions in the real exe.
@@ -639,6 +776,8 @@ int main(int argc, char** argv) {
     test_physics_hook();
     test_net_sync();
     test_sound_fix();
+    test_wide_fov();
+    test_menu_aspect();
     if (argc > 1) test_against_original(argv[1]);
     else std::printf("(no GP4.exe given: differential test skipped)\n");
     std::printf("[cockpit] %d passed, %d failed\n", g_pass, g_fail);

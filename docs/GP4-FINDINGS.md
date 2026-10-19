@@ -93,6 +93,31 @@ El mod (`[display] resolution = 1920x1080`) cambia en memoria las constantes de 
 ## Vídeo
 
 - `d3d8.dll`: solo importa `Direct3DCreate8`.
+
+### Cámara y campo de visión (análisis estático, 2026-10-19)
+
+| Hecho | Evidencia |
+|---|---|
+| El mundo 3D pasa por las transformaciones de Direct3D: `SetTransform` WORLD (`0x100`) por objeto, VIEW (`2`) y PROJECTION (`3`), con vértices sin transformar (FVF `0x142` XYZ+color+textura, `0x112`, `0x102`, `0x152`…) en vertex buffers. Unas 240 llamadas a `SetTransform` y 270 a `DrawPrimitive`/`DrawIndexedPrimitive` | vtable del dispositivo `+0x94`, `+0x118`, `+0x11c`, `+0x130` |
+| Los vértices ya transformados (`XYZRHW`: FVF `0x144`, `0x1c4`, `0x2c4`) solo aparecen en 12 funciones: el texto (`CGP4Font::DrawText`, `0x473b20`) y otras de 2D (HUD, menús; por identificar una a una) | `0x44d88e`, `0x45bd20`, `0x48fce0`, `0x4a0f50`, `0x4a8230`, `0x4ae2c0`, `0x4b06f0`, `0x4b09f0`, `0x4beb50` |
+| La proyección se construye con `_11 = 1/tan(h/2)`, `_22 = 1/tan(v/2)`, `_33 = lejos/(lejos−cerca)`: campo horizontal `[0xa4fd50]` y vertical `[0xa4fccc]` por separado, cerca `[0xa51fc0]`, lejos 9000 `[0xa4f5a4]`. Copia la matriz en el objeto del dispositivo (`+0x2098`) | `0x4939e0`, `0x493f07`, `0x4945cd` |
+| **GP4 es «Vert−»**: fija el campo horizontal `h = [0xa532a0]` y deduce el vertical del aspecto de la pantalla `[0xa532d0]` (ancho/alto): `v = 2·atan(tan(h/2) / aspecto)` en `[0xa53290]`. En una pantalla más ancha se ve lo mismo a lo ancho y **menos** a lo alto: en 21:9 o en triple pantalla la imagen queda muy recortada por arriba y por abajo | `0x493e9f`-`0x493ed5` |
+| El campo horizontal sale de la cámara: `h = clamp(45° / (zoom / 512), 5°, 120° o 140°)`, con el zoom en `[0xa53288]` | `0x493da9`-`0x493e63` |
+| **El descarte de objetos (frustum culling) usa las matrices de GP4, no las que llegan a Direct3D**: `0x446240` saca los 6 planos de VIEW × PROJECTION de sus variables globales (`[0xa51f58]`, `[0xa50ac8]`) con D3DX (`0x55c3ee` multiplicar, `0x55e1c5` normalizar el plano) | llamadas desde `0x49a1a0`, `0x4a3300`, `0x4c6950` |
+
+Consecuencias:
+
+- `[display] aspect_fix` corrige la matriz al pasar por `SetTransform`, pero la matriz de GP4 no está estirada (se construye para el aspecto real), así que no detecta nada que corregir. Y si ensanchara la vista solo ahí, se verían huecos en los lados: GP4 ya habría descartado lo que cae fuera de su campo original.
+- **Ultrapanorámico (Hor+)**: hay que cambiar el cálculo de GP4 en `0x493aa0` (mantener el campo vertical de 4:3 o 16:9 y ensanchar el horizontal, `h = 2·atan(tan(v/2) · aspecto)`). Así la matriz y el descarte coinciden. El límite de 120°/140° solo importa para triple pantalla.
+- **Triple pantalla con monitores en ángulo**: como la cámara pasa por `SetTransform`, `d3d8.dll` puede grabar las llamadas de dibujo de la escena y repetirlas tres veces, con la vista girada y la proyección y el viewport de cada monitor (`screen_view` en `core/projection.h`). GP4 tendría que descartar con un campo que cubra las tres pantallas. Falta ver cómo se dibujan los retrovisores (render a textura) y el HUD.
+**Capturas de F11 a 5760x1080 (2026-10-19):**
+
+- **Menús**: todo con vértices sin transformar (`XYZ|DIFF|TEX1`, `XYZ|TEX1`), proyección ortográfica (`_11 = _22 = 2`, sin perspectiva) y un viewport 4:3 centrado que calcula GP4 (`x=2159 w=1440 h=1080`). Borra la pantalla entera en negro y el viewport completo en gris `0x777777`. Aun así, en triple pantalla el texto sale estrecho y deformado: GP4 calcula algo del menú (el tamaño de las letras, probablemente) con el ancho total y no con el del viewport.
+- **En pista, GP4 transforma él mismo los vértices**: los 683 dibujos del fotograma son `XYZRHW|DIFF|TEX1` (ya en píxeles de pantalla), sin ningún `SetTransform`. El orden: una textura de 64x64, una de 512x512 (212 dibujos), otra de 64x64, una de 720x720 (150), otra de 720x720 (solo se borra) y por último la pantalla (318 dibujos, el mundo y el HUD mezclados, todos `XYZRHW`). Las rutas con `SetTransform` del análisis estático son las de los menús y otras pantallas.
+- Consecuencias: el cambio de campo de visión de `[display] wide_fov` actúa donde debe (GP4 proyecta con esos valores). Pero en pista no se puede repetir la escena con otra cámara desde `d3d8.dll` (triple pantalla con monitores en ángulo): habría que hacer que GP4 dibuje la escena varias veces. Y para mover el HUD hay que distinguir sus dibujos de los del mundo, todos `XYZRHW`.
+- **El motor de menús** guarda su propio tamaño de pantalla en `[0x9ed5b8]` (ancho) y `[0x9ed5bc]` (alto). Lo escriben `0x5b73b0` (`SetScreenSize(ancho, alto)`, stdcall), `0x5b47e5` (al iniciarse, desde `0x4ffdc9`) y `0x5ccc61`. `0x5cc820` calcula el viewport y la proyección ortográfica (`D3DXMatrixOrtho`, `0x55cd4b`): si ancho/alto < 2 usa la pantalla entera (en 16:9, el menú 4:3 estirado); si es ≥ 2 (`[0x5fa6ac]` = 2,0) lo encierra en un 4:3 centrado. Unas 40 funciones más del motor usan ese tamaño y no tienen en cuenta el recorte, de ahí el texto estrecho en 21:9 y triple pantalla. El cursor del menú se mueve por diferencias: `0x5c7d5b` devuelve el cursor de Windows a (400, 300) de la ventana.
+- `[display] menu_aspect` (16:9) le da al motor de menús un ancho de 16:9 como máximo en esas tres escrituras, y `d3d8.dll` mueve sus viewports al centro del back buffer real. Mientras se ven los menús (fotogramas sin dibujos `XYZRHW` en el back buffer), el viewport de pantalla completa también se centra y los lados se borran en negro.
+- `0x493aa0` también ajusta el campo de visión según el ancho de la pantalla (`[0xa69878]` es la mitad del ancho, `[0xa6987c]` la de la altura): factores fijos para 640/800/1024/1280/1600 y una fórmula para el resto. Con la cámara `[0xa6e21c] = 0` lee las teclas `+`/`-` (`VK_ADD`/`VK_OEM_PLUS`, `VK_SUBTRACT`/`VK_OEM_MINUS`) y cambia un zoom `[0xa66380]` de 0 a 100.
 - GP4PP modifica el formato del z-buffer en `0x5050fc`, antes de `CreateDevice`, así que no interfiere con los hooks del mod.
 
 ## Red

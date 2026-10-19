@@ -29,4 +29,13 @@ double horizontal_fov_deg(const Mat4& p);
 // Returns the yaw (radians, positive = right) for screen i; `out` gets its projection.
 double screen_view(const Mat4& centre, int i, int n, double screen_aspect, double bezel_frac, Mat4& out);
 
+// GP4's camera is "Vert-": it fixes the horizontal FOV `h` and derives the vertical one from
+// the screen's aspect, v = 2 atan(tan(h/2) / aspect), so a wider screen sees less above and
+// below (0x493aa0, docs/GP4-FINDINGS.md "Cámara"). hor_plus_fov keeps GP4's view up to
+// `ref_aspect` and, on wider screens, keeps the vertical FOV GP4 has at `ref_aspect` and
+// widens the horizontal one instead. Angles in radians; the horizontal one stays < 179 deg.
+struct CameraFov { double h, v; };
+// zoom > 1 narrows the view (the camera seems closer), < 1 widens it; it applies at any aspect.
+CameraFov hor_plus_fov(double h, double aspect, double ref_aspect, double zoom = 1.0);
+
 }  // namespace gp4u

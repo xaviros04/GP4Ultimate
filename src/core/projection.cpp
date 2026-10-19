@@ -40,4 +40,18 @@ double screen_view(const Mat4& centre, int i, int n, double screen_aspect, doubl
     return k * step;
 }
 
+CameraFov hor_plus_fov(double h, double aspect, double ref_aspect, double zoom) {
+    if (!(aspect > 0)) return {h, h};
+    double t = std::tan(h / 2.0);
+    if (zoom > 0 && zoom != 1.0) {
+        t /= zoom;
+        h = 2.0 * std::atan(t);
+    }
+    if (!(ref_aspect > 0) || aspect <= ref_aspect) return {h, 2.0 * std::atan(t / aspect)};
+    double v = 2.0 * std::atan(t / ref_aspect);
+    double wide = 2.0 * std::atan(t * aspect / ref_aspect);
+    const double kMax = 179.0 * 3.14159265358979323846 / 180.0;
+    return {wide < kMax ? wide : kMax, v};
+}
+
 }  // namespace gp4u

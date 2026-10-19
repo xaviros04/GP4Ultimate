@@ -97,6 +97,8 @@ endif()
 
 add_library(d3d8 SHARED
     src/d3d8/gp4u_d3d8.cpp
+    src/d3d8/wide_fov.cpp
+    src/d3d8/menu_aspect.cpp
     src/d3d8/vtidx.c
     src/win/log.cpp
     src/d3d8/d3d8.def)
@@ -222,7 +224,7 @@ add_test(NAME dpserver_unreachable COMMAND test_dpserver unreachable WORKING_DIR
 # it like GP4 does; with GP4_EXE set it also runs the ORIGINAL function, read at test time
 # from the user's GP4.exe (never committed), and compares bit for bit.
 add_executable(test_cockpit tests/win/test_cockpit.cpp src/win/cockpit_patch.cpp src/win/physics_hook.cpp
-               src/win/net_sync.cpp src/win/sound_fix.cpp src/win/log.cpp)
+               src/win/net_sync.cpp src/win/sound_fix.cpp src/win/log.cpp src/d3d8/wide_fov.cpp src/d3d8/menu_aspect.cpp src/core/projection.cpp)
 target_include_directories(test_cockpit PRIVATE src)
 set_target_properties(test_cockpit PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${E2E_DIR}
                       RUNTIME_OUTPUT_DIRECTORY_RELEASE ${E2E_DIR} RUNTIME_OUTPUT_DIRECTORY_DEBUG ${E2E_DIR})

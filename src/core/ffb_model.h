@@ -72,7 +72,7 @@ struct FfbParams {
     // 0.10-0.12 at 60 Hz). With damping_adapt the damping_speed term is scaled by the
     // measured interval / (1/30 s), clamped to 0.55..1.3, so 30 and 60 fps both feel right.
     bool damping_adapt = true;
-    double damping_low_speed = 0.0;             // extra damping fading out by 15 m/s
+    double damping_low_speed = 0.15;            // extra damping fading out by 15 m/s (pit lane, grid)
     double friction = 0.01;
     double no_car_centering = 0.15;             // gentle spring when there is no telemetry
 

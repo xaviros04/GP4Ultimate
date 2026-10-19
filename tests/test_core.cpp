@@ -22,6 +22,7 @@
 #include "core/net_stats.h"
 #include "core/paths.h"
 #include "core/projection.h"
+#include "d3d8/menu_aspect.h"
 
 using namespace gp4u;
 
@@ -754,6 +755,49 @@ static void test_projection() {
     NEAR(q.m[1][1], perspective(45, 16.0 / 9.0).m[1][1] / 1.2, 1e-5);
     // Three angled screens: symmetric yaws, centre straight ahead, each with its own aspect.
     Mat4 c = perspective(40, 16.0 / 9.0), s0, s1, s2;
+    {   // GP4's Vert- camera turned Hor+ beyond 16:9.
+        const double h = 1.0, r = 16.0 / 9.0;
+        CameraFov n = hor_plus_fov(h, 4.0 / 3.0, r);   // narrower: GP4's own
+        NEAR(n.h, h, 1e-12);
+        NEAR(n.v, 2 * std::atan(std::tan(0.5) / (4.0 / 3.0)), 1e-12);
+        CameraFov s = hor_plus_fov(h, r, r);           // 16:9: unchanged too
+        NEAR(s.h, h, 1e-12);
+        CameraFov w = hor_plus_fov(h, 21.0 / 9.0, r);  // wider: same vertical as 16:9, more to the sides
+        NEAR(w.v, s.v, 1e-12);
+        CHECK(w.h > h);
+        NEAR(std::tan(w.h / 2) / std::tan(w.v / 2), 21.0 / 9.0, 1e-9);   // matches the screen: not stretched
+        CameraFov t = hor_plus_fov(h, 48.0 / 9.0, r);  // triple screen
+        NEAR(t.v, s.v, 1e-12);
+        CHECK(t.h > w.h && t.h < 179.0 * 3.14159265358979 / 180.0);
+        CameraFov x = hor_plus_fov(2.6, 20.0, r);      // absurdly wide: capped below 180 deg
+        CHECK(x.h <= 179.0 * 3.14159265358979 / 180.0 + 1e-12);
+    }
+    {   // zoom: closer camera = narrower view, at any aspect.
+        CameraFov z = hor_plus_fov(1.0, 4.0 / 3.0, 16.0 / 9.0, 2.0);
+        NEAR(std::tan(z.h / 2), std::tan(0.5) / 2, 1e-12);
+        CameraFov zw = hor_plus_fov(1.0, 48.0 / 9.0, 16.0 / 9.0, 1.5);
+        CameraFov nw = hor_plus_fov(1.0, 48.0 / 9.0, 16.0 / 9.0);
+        CHECK(zw.h < nw.h && zw.v < nw.v);
+    }
+    {   // Menus at 16:9 at most, centred.
+        CHECK(menu_width(5760, 1080, 16.0 / 9.0) == 1920);
+        CHECK(menu_width(2560, 1080, 16.0 / 9.0) == 1920);
+        CHECK(menu_width(1920, 1080, 16.0 / 9.0) == 1920);
+        CHECK(menu_width(1600, 1200, 16.0 / 9.0) == 1600);
+        CHECK(menu_width(5760, 1080, 0) == 5760);
+        CHECK(menu_width(3440, 1440, 16.0 / 9.0) == 2560);
+        // The engine's 4:3-ish viewport inside its 1920: moved by (5760-1920)/2.
+        ViewportX a = menu_viewport(240, 1440, 5760, 1920, true);
+        CHECK(a.moved && a.x == 2160 && a.w == 1440);
+        ViewportX b = menu_viewport(0, 1920, 5760, 1920, false);   // the engine's whole screen, even in a race overlay
+        CHECK(b.moved && b.x == 1920 && b.w == 1920);
+        ViewportX c2 = menu_viewport(0, 5760, 5760, 1920, true);   // full screen while in the menus
+        CHECK(c2.moved && c2.x == 1920 && c2.w == 1920);
+        ViewportX r = menu_viewport(0, 5760, 5760, 1920, false);   // the race's view: untouched
+        CHECK(!r.moved && r.x == 0 && r.w == 5760);
+        ViewportX n = menu_viewport(0, 1920, 1920, 1920, true);    // a 16:9 screen: nothing to do
+        CHECK(!n.moved);
+    }
     double y0 = screen_view(c, 0, 3, 16.0 / 9.0, 0.0, s0);
     double y1 = screen_view(c, 1, 3, 16.0 / 9.0, 0.0, s1);
     double y2 = screen_view(c, 2, 3, 16.0 / 9.0, 0.0, s2);

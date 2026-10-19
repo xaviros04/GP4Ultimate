@@ -2,6 +2,9 @@
 
 [English version](GUIDE.md)
 
+- Capturas de toda mi configuración para conducir con este mod: [galería de imgur](https://imgur.com/gallery/gp4-ultimate-settings-cgtT0Oa)
+- Comunidad, dudas y carreras: [Discord](https://discord.gg/hFzEg5B4K)
+
 1. [Requisitos](#requisitos)
 2. [Instalación](#instalación)
 3. [Mandos](#mandos)
@@ -54,6 +57,7 @@ En las opciones de controles de GP4:
 2. Asigna dirección = eje X, acelerador = eje Y, freno = eje Rz, embrague = eje Z.
 3. **Calibra**: gira el volante a tope a los dos lados y pisa cada pedal. GP4 calibra los ejes en bruto él mismo.
 4. **Activa el force feedback.** GP4 solo calcula la fuerza de la dirección con el force feedback activado, y el mod usa esa fuerza. La fuerza FFB del menú de GP4 también escala la señal (un 60 % es un buen comienzo).
+5. **Desactiva la ayuda a la dirección (F8 en pista).** Si está activada, GP4 gira por ti y el force feedback da saltos y se nota raro.
 
 ## Force feedback
 
@@ -66,7 +70,8 @@ En las opciones de controles de GP4:
 GP4 solo actualiza su fuerza entre 30 y 60 veces por segundo, y a alta velocidad el volante puede oscilar en recta ("ping-pong"). La amortiguación del mod crece con la velocidad para evitarlo.
 
 - Por defecto la amortiguación general la pone el software de tu base (True Drive de Simucube, Fanatec, Moza...): ponle algo de amortiguación allí. El mod solo añade **Amortiguación a alta velocidad** (0,15), la parte que sujeta el centro en recta, que la base no puede hacer porque no sabe a qué velocidad va el coche.
-- Si notas el volante "rápido y elástico", falta amortiguación en total: súbela en la base, o pon aquí **Amortiguación base** (sobre 0,03) y **Amortiguación en boxes** (sobre 0,04).
+- **Amortiguación en boxes** (0,15) da peso a baja velocidad (parrilla, calle de boxes) y desaparece a partir de 54 km/h.
+- Si notas el volante "rápido y elástico", falta amortiguación en total: súbela en la base, o pon aquí **Amortiguación base** (sobre 0,03).
 
 ### Pestaña Efectos
 
@@ -87,7 +92,7 @@ El menú gráfico de GP4 solo ofrece tamaños 4:3 y 5:4 hasta 1600x1200.
 1. Pon en **Resolución del juego** tu tamaño, p. ej. `1920x1080`, `2560x1440`, `3840x2160`, o `auto` (la del escritorio).
 2. Arranca GP4 y elige **1600x1200** una vez en sus opciones gráficas: esa opción pasa a ser tu resolución.
 
-Ultrapanorámico (`2560x1080`, `3440x1440`) y triple pantalla (`5760x1080`) están en desarrollo: todavía no funcionan del todo bien.
+Para pantallas ultrapanorámicas y triple monitor, mira [Ultrapanorámico y triple pantalla](#ultrapanorámico-y-triple-pantalla).
 
 En pantalla completa tu monitor tiene que admitir ese tamaño. Las tarjetas modernas listan cientos de modos y GP4 solo lee los 256 primeros, así que las resoluciones grandes podían no aparecer; cuando pasa, el mod le da a GP4 una lista más corta con la tuya la primera. `gp4ultimate_d3d.log` dice qué ha hecho y, si tu monitor no tiene ese tamaño, lista los más parecidos. En modo ventana vale cualquier tamaño.
 
@@ -95,9 +100,25 @@ En pantalla completa tu monitor tiene que admitir ese tamaño. Las tarjetas mode
 
 **Jugar en ventana** abre GP4 como una ventana sin bordes del tamaño de su resolución, centrada en el monitor. Con NVIDIA Surround / AMD Eyefinity queda en la pantalla central. Útil para una ventana de 1920x1080 en un escritorio de triple pantalla.
 
-### Imagen panorámica
+### Ultrapanorámico y triple pantalla
 
-Si la imagen sale estirada a lo ancho, activa **Corrección Hor+** (el log indica cuándo hace falta). **Escala del campo de visión** (Mostrar avanzados) por encima de 1 abre la vista.
+GP4 original muestra lo mismo a lo ancho en cualquier pantalla y recorta arriba y abajo, así que en una pantalla ancha el volante del cockpit queda fuera de la vista, y los menús salen rotos. GP4 Ultimate arregla las dos cosas:
+
+- **En pista** (**Ver más en pantallas anchas**, activado por defecto) la vista mantiene la altura de una pantalla 16:9 y muestra más a los lados.
+- **En los menús** (**Menús como máximo en**, Mostrar avanzados, por defecto 16:9) los menús se dibujan en el centro a 16:9, con bandas negras.
+
+Cómo configurarlo:
+
+1. Ultrapanorámico: pon en **Resolución del juego** el tamaño de tu monitor, p. ej. `2560x1080` o `3440x1440`, o `auto`.
+2. Triple pantalla: une los tres monitores en una sola pantalla con NVIDIA Surround o AMD Eyefinity y pon en **Resolución del juego** el tamaño total, p. ej. `5760x1080` (3 x 1920x1080), o `auto`.
+3. Arranca GP4 y elige **1600x1200** una vez en sus opciones gráficas.
+4. **Zoom de la cámara**: por encima de 1 la vista es más cerrada y la cámara parece más cerca. En triple pantalla se recomienda **2,0** (con 1 la pantalla central muestra lo que mostraría un solo monitor 16:9, y se ve lejos). En ultrapanorámico prueba entre 1,0 y 1,3.
+
+Conviene saber:
+
+- Las tres pantallas muestran una sola vista plana, no tres cámaras en ángulo (GP4 proyecta la escena él mismo, así que el mod no puede redibujarla desde otros ángulos). Las pantallas laterales se ven algo estiradas hacia sus bordes.
+- En 16:9 y pantallas más estrechas no cambia nada.
+- **Corrección Hor+** y **Escala del campo de visión** (Mostrar avanzados) son opciones anteriores para otros casos; con lo anterior no hacen falta.
 
 ### Volante del cockpit
 

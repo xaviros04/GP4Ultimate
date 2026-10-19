@@ -30,6 +30,8 @@
 #include <vector>
 
 #include "core/gp4_resolution.h"
+#include "wide_fov.h"
+#include "menu_aspect.h"
 #include "core/paths.h"
 #include "core/version.h"
 #include "core/ini.h"
@@ -93,6 +95,10 @@ struct Settings {
     std::string dir;
     Ini ini;
     bool aspect_fix = false;
+    bool wide_fov = true;       // [display] wide_fov: Hor+ in GP4's own camera (wide_fov.h)
+    double fov_ref_aspect = 16.0 / 9.0;
+    double fov_zoom = 1.0;      // [display] fov_zoom: > 1 = camera closer
+    double menu_aspect = 16.0 / 9.0;   // [display] menu_aspect: widest menus (0 = GP4's own)
     double aspect = 0;          // 0 = back buffer
     double fov_scale = 1.0;
     int capture_key = VK_F11;
@@ -116,6 +122,14 @@ std::mutex g_mtx;   // GP4 renders from one thread; this only guards the capture
 UINT g_bb_w = 0, g_bb_h = 0;
 HWND g_hwnd = nullptr;
 bool g_logged_aspect = false;
+
+// [display] menu_aspect: GP4's menu engine thinks the screen is g_menu_w wide; its viewports
+// are moved to the centre of the real back buffer (menu_aspect.h).
+bool g_menu_on = false;
+bool g_rt_bb = true;              // drawing into the back buffer (not a texture)
+unsigned g_rhw_bb = 0;            // pre-transformed draws into the back buffer this frame
+bool g_menu_frame = true;         // last frame had none: menus (races are all pre-transformed)
+int menu_w() { return g_menu_on ? menu_width((int)g_bb_w, (int)g_bb_h, g_set.menu_aspect) : (int)g_bb_w; }
 
 // Capture state.
 FILE* g_cap = nullptr;
@@ -180,7 +194,10 @@ void note_draw(const char* kind, D3DPRIMITIVETYPE t, UINT prims) {
     ++g_fs.draws;
     g_fs.prims += prims;
     if (g_vs & 1) ++g_fs.shader_draws;
-    else if ((g_vs & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW) ++g_fs.pretransformed;
+    else if ((g_vs & D3DFVF_POSITION_MASK) == D3DFVF_XYZRHW) {
+        ++g_fs.pretransformed;
+        if (g_rt_bb) ++g_rhw_bb;
+    }
     if (g_cap) cap("  %s type=%d prims=%u vs=%s", kind, (int)t, prims, fvf_str(g_vs).c_str());
 }
 
@@ -196,6 +213,7 @@ void hook(void** vtbl, int idx, void* fn, void** orig) {
 void update_backbuffer(const D3DPRESENT_PARAMETERS* pp, HWND focus) {
     g_bb_w = pp->BackBufferWidth;
     g_bb_h = pp->BackBufferHeight;
+    g_rt_bb = true;
     g_hwnd = pp->hDeviceWindow ? pp->hDeviceWindow : focus;
     if ((!g_bb_w || !g_bb_h) && g_hwnd) {
         RECT r;
@@ -257,16 +275,27 @@ HRESULT STDMETHODCALLTYPE h_SetViewport(IDirect3DDevice8* d, const D3DVIEWPORT8*
     ++g_fs.viewports;
     if (g_cap && v) cap("  SetViewport x=%lu y=%lu w=%lu h=%lu z=%.2f..%.2f", (unsigned long)v->X, (unsigned long)v->Y,
                         (unsigned long)v->Width, (unsigned long)v->Height, v->MinZ, v->MaxZ);
+    if (v && g_menu_on && g_rt_bb) {
+        ViewportX mx = menu_viewport(v->X, v->Width, g_bb_w, (uint32_t)menu_w(), g_menu_frame);
+        if (mx.moved) {
+            D3DVIEWPORT8 m = *v;
+            m.X = mx.x;
+            m.Width = mx.w;
+            if (g_cap) cap("    -> x=%lu w=%lu (menu, centred)", (unsigned long)m.X, (unsigned long)m.Width);
+            return o_SetViewport(d, &m);
+        }
+    }
     return o_SetViewport(d, v);
 }
 
 HRESULT STDMETHODCALLTYPE h_SetRenderTarget(IDirect3DDevice8* d, IDirect3DSurface8* rt, IDirect3DSurface8* z) {
     ++g_fs.rt_sets;
-    if (g_cap) {
-        D3DSURFACE_DESC desc{};
-        if (rt) rt->GetDesc(&desc);
-        cap("  SetRenderTarget rt=%p (%ux%u fmt %d) z=%p", (void*)rt, desc.Width, desc.Height, (int)desc.Format, (void*)z);
+    D3DSURFACE_DESC desc{};
+    if (rt) {
+        rt->GetDesc(&desc);
+        g_rt_bb = desc.Width == g_bb_w && desc.Height == g_bb_h;
     }
+    if (g_cap) cap("  SetRenderTarget rt=%p (%ux%u fmt %d) z=%p", (void*)rt, desc.Width, desc.Height, (int)desc.Format, (void*)z);
     return o_SetRenderTarget(d, rt, z);
 }
 
@@ -284,6 +313,14 @@ HRESULT STDMETHODCALLTYPE h_EndScene(IDirect3DDevice8* d) {
 HRESULT STDMETHODCALLTYPE h_Clear(IDirect3DDevice8* d, DWORD n, const D3DRECT* r, DWORD f, D3DCOLOR c, float z, DWORD s) {
     ++g_fs.clears;
     if (g_cap) cap("  Clear rects=%lu flags=0x%lx color=%08lx z=%.2f", (unsigned long)n, (unsigned long)f, (unsigned long)c, z);
+    // Menus: the bars beside the centred menu stay black (and lose the last race image).
+    if (g_menu_on && g_menu_frame && g_rt_bb && n == 0 && (f & D3DCLEAR_TARGET) && menu_w() < (int)g_bb_w) {
+        D3DVIEWPORT8 vp{}, full{0, 0, g_bb_w, g_bb_h, 0.0f, 1.0f};
+        d->GetViewport(&vp);
+        o_SetViewport(d, &full);
+        o_Clear(d, 0, nullptr, D3DCLEAR_TARGET, D3DCOLOR_XRGB(0, 0, 0), 1.0f, 0);
+        o_SetViewport(d, &vp);
+    }
     return o_Clear(d, n, r, f, c, z, s);
 }
 
@@ -361,6 +398,8 @@ void end_frame_stats() {
 
 HRESULT STDMETHODCALLTYPE h_Present(IDirect3DDevice8* d, const RECT* s, const RECT* dr, HWND w, const RGNDATA* r) {
     HRESULT hr = o_Present(d, s, dr, w, r);
+    g_menu_frame = g_rhw_bb == 0;
+    g_rhw_bb = 0;
     std::lock_guard<std::mutex> lk(g_mtx);
     end_frame_stats();
     ++g_frame;
@@ -603,6 +642,23 @@ void load_settings(HMODULE self) {
     if (g_set.ini.get_bool("display", "log", true)) log_open(g_set.dir + "\\gp4ultimate_d3d.log");
     g_set.aspect_fix = g_set.ini.get_bool("display", "aspect_fix", false);
     g_set.fov_scale = g_set.ini.get_double("display", "fov_scale", 1.0);
+    g_set.wide_fov = g_set.ini.get_bool("display", "wide_fov", true);
+    auto ratio = [](const char* key, double& out) {
+        std::string r = Ini::lower(g_set.ini.get("display", key, ""));
+        if (r.empty()) return;
+        if (r == "off" || r == "0" || r == "none") { out = 0; return; }
+        size_t c = r.find(':');
+        double rw, rh;
+        if (c != std::string::npos && parse_double(r.substr(0, c), rw) && parse_double(r.substr(c + 1), rh) && rh > 0 && rw / rh >= 1.0)
+            out = rw / rh;
+        else if (parse_double(r, rw) && rw >= 1.0)
+            out = rw;
+        else
+            logf("%s = %s not understood (use e.g. 16:9) - using %.3f", key, r.c_str(), out);
+    };
+    ratio("fov_ref_aspect", g_set.fov_ref_aspect);
+    ratio("menu_aspect", g_set.menu_aspect);
+    g_set.fov_zoom = std::clamp(g_set.ini.get_double("display", "fov_zoom", 1.0), 0.3, 4.0);
     std::string a = Ini::lower(g_set.ini.get("display", "aspect", "auto"));
     size_t colon = a.find(':');
     double w, h;
@@ -661,6 +717,22 @@ void init() {
     g_real = real ? (Create8Fn)GetProcAddress(real, "Direct3DCreate8") : nullptr;
     if (!g_real) logf("FATAL: no real Direct3DCreate8");
     patch_resolution();
+    if (g_set.wide_fov) {
+        std::string why;
+        if (install_wide_fov(gp4_wide_fov_targets(), g_set.fov_ref_aspect, &why, g_set.fov_zoom))
+            logf("wide_fov: screens wider than %.3f see more to the sides instead of less above and below (Hor+), zoom %.2f",
+                 g_set.fov_ref_aspect, g_set.fov_zoom);
+        else
+            logf("wide_fov: not installed: %s", why.c_str());
+    }
+    if (g_set.menu_aspect > 0) {
+        std::string why;
+        if (install_menu_aspect(gp4_menu_size_targets(), g_set.menu_aspect, &why))
+            logf("menu_aspect: menus at most %.3f wide, centred", g_set.menu_aspect);
+        else
+            logf("menu_aspect: not installed: %s", why.c_str());
+        g_menu_on = why.empty();
+    }
 }
 
 }  // namespace

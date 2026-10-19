@@ -2,6 +2,9 @@
 
 [Versión en español](GUIA.md)
 
+- Screenshots of all my settings to drive with this mod: [imgur gallery](https://imgur.com/gallery/gp4-ultimate-settings-cgtT0Oa)
+- Community, questions and race nights: [Discord](https://discord.gg/hFzEg5B4K)
+
 1. [Requirements](#requirements)
 2. [Installing](#installing)
 3. [Controllers](#controllers)
@@ -54,6 +57,7 @@ In GP4's controller options:
 2. Assign steering = X axis, throttle = Y axis, brake = Rz axis, clutch = Z axis.
 3. **Calibrate**: turn the wheel fully to both sides and press every pedal. GP4 calibrates the raw axes itself.
 4. **Enable force feedback.** GP4 only computes its steering force when force feedback is on, and the mod uses that force. The FFB strength in GP4's menu scales the signal too (around 60 % is a good start).
+5. **Disable steering help (F8 while driving).** With it on, GP4 steers for you and the force feedback jumps and feels weird.
 
 ## Force feedback
 
@@ -66,7 +70,8 @@ In GP4's controller options:
 GP4 updates its force only 30-60 times per second, and at speed the wheel can oscillate on straights ("ping-pong"). The mod's damping grows with speed to prevent it.
 
 - By default the general damping is left to your wheel base software (Simucube True Drive, Fanatec, Moza...): set some damping there. The mod only adds **High-speed damping** (0.15), the part that holds the centre on straights, which a base cannot do because it does not know the car's speed.
-- If the wheel feels "fast and elastic", there is too little damping overall: raise it in the base, or set **Base damping** (around 0.03) and **Pit-lane damping** (around 0.04) here.
+- **Pit-lane damping** (0.15) adds weight at low speed (grid, pit lane) and fades out by 54 km/h.
+- If the wheel feels "fast and elastic", there is too little damping overall: raise it in the base, or set **Base damping** (around 0.03) here.
 
 ### Effects tab
 
@@ -87,7 +92,7 @@ GP4's graphics menu only offers 4:3 and 5:4 sizes up to 1600x1200.
 1. Set **Game resolution** to your size, e.g. `1920x1080`, `2560x1440`, `3840x2160`, or `auto` (the desktop's).
 2. Start GP4 and choose **1600x1200** once in its graphics options: that entry now means your resolution.
 
-Ultrawide (`2560x1080`, `3440x1440`) and triple screen (`5760x1080`) are a work in progress: not fully working yet.
+For ultrawide and triple screens, see [Ultrawide and triple screens](#ultrawide-and-triple-screens).
 
 In full screen your monitor must support the size. Modern drivers list hundreds of modes and GP4 only reads the first 256, so big resolutions could be missing; when that happens the mod gives GP4 a shorter list with yours first. `gp4ultimate_d3d.log` says what it did, and if your monitor does not have the size it lists the closest ones. Window mode works with any size.
 
@@ -95,9 +100,25 @@ In full screen your monitor must support the size. Modern drivers list hundreds 
 
 **Play in a window** opens GP4 as a borderless window of its resolution, centred on the monitor. With NVIDIA Surround / AMD Eyefinity it lands on the centre screen. Handy with a 1920x1080 window on a triple-screen desktop.
 
-### Wide images
+### Ultrawide and triple screens
 
-If the picture looks stretched sideways, turn on **Hor+ correction** (the log tells you when it applies). **Field of view scale** (Show advanced) above 1 widens the view.
+Original GP4 keeps the same width of view on any screen and cuts the top and bottom instead, so on a wide screen the cockpit wheel drops out of sight, and its menus come out broken. GP4 Ultimate fixes both:
+
+- **On track** (**See more on wide screens**, on by default) the view keeps the height a 16:9 screen has and shows more to the sides.
+- **In the menus** (**Widest menus**, Show advanced, default 16:9) the menus are drawn in the centre at 16:9, with black bars.
+
+Setting it up:
+
+1. Ultrawide: set **Game resolution** to your monitor's size, e.g. `2560x1080` or `3440x1440`, or `auto`.
+2. Triple screen: join the three monitors into one display with NVIDIA Surround or AMD Eyefinity, then set **Game resolution** to the whole size, e.g. `5760x1080` (3 x 1920x1080), or `auto`.
+3. Start GP4 and choose **1600x1200** once in its graphics options.
+4. **Camera zoom**: above 1 the view is narrower and the camera seems closer. With a triple screen **2.0** is recommended (at 1 the centre screen shows what a single 16:9 screen would, which feels far away). On an ultrawide try 1.0-1.3.
+
+Good to know:
+
+- The three screens show one flat view, not three angled cameras (GP4 projects the scene itself, so the mod cannot redraw it from other angles). The outer screens look a little stretched towards their edges.
+- 16:9 and narrower screens are not changed.
+- **Hor+ correction** and **Field of view scale** (Show advanced) are older options for other cases; with the above they are not needed.
 
 ### Cockpit steering wheel
 
